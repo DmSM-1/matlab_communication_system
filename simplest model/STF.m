@@ -1,0 +1,44 @@
+classdef STF
+
+    properties
+        N
+        L
+        Ppos        % pilot's position
+        Nf          % num frames
+        waveform    % preamble
+
+        det_mask
+        det_threshould
+
+    end
+
+    methods
+        function obj = STF(N,L, Ppos, Nf, det_mask_width, det_threshould)
+            obj.N = N;
+            obj.L = L;
+            obj.Ppos = int32(round(Ppos));
+            obj.Nf = Nf;
+            
+            waveform = complex(zeros(N, Nf));
+            
+            ampl = N/sqrt(length(Ppos));
+
+            for i = 1:Nf
+                waveform(obj.Ppos, i) = ampl*exp(2i*pi*(i-1)*(L/N)*double(obj.Ppos-1));
+            end
+            
+            waveform = ifft(waveform, N, 1);
+            waveform = vertcat(waveform(end-obj.L+1:end, :), waveform);
+
+            obj.waveform = waveform(:);
+
+            det_mask = zeros(N, 1);
+            det_mask(obj.Ppos) = 1;
+            det_mask = conv(det_mask, ones(det_mask_width,1), "same");
+
+            obj.det_mask = det_mask;
+            obj.det_threshould = det_threshould;
+
+        end
+    end
+end
