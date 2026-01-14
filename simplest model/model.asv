@@ -1,25 +1,39 @@
+% Channel Model ===========================================================
+    Model   = 'Model-B';
+    dist    = 10;
+    Fc      = 2.4e9;
+    Fs      = 20e6;
+    SNR     = 10;
+    
+    chan = Channel(Model, dist, Fc, Fs, SNR);
+%==========================================================================
 
-%%%%%%%%%% Channel Model %%%%%%%%%%
-Model   = 'Model-A';
-dist    = 10;
-Fs      = 20000000;
-SNR     = 50;
+% Frame format ============================================================
+    N       = 1024; % num subcarriers
+    L       = 32;   % cycle extention
+    Npil    = 4;    % pilot num
+    Nsymb   = 5;    % num data symbols
+    
+    % STF format
+        margin1 = 1;
+        margin2 = 1;
+        est_symb = 4;
+        mask_width = 5;
+        det_threshold = 1.0;
+        tones = [0.25*N, 0.75*N]+1;
 
-chan = Channel(Model, dist, Fs, SNR);
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        stf = STF(N,L, tones, margin1, est_symb, margin2, mask_width, det_threshold);
+%==========================================================================
 
-%%%%%%%%%% Frame format %%%%%%%%%%
-N       = 1024; % num subcarriers
-L       = 32;   % cycle extention
-Npil    = 4;    % pilot num
-NumFr   = 5;    % num data frames
+% Init Reciever ===========================================================
+    stf_detector = STF_Detector;
+%==========================================================================
 
-seq_frames = [1 4; 2 10; 3 NumFr]; % message format
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% stf = STF(N,L,[0.25*N, 0.75*N]+1, seq_frames(1,2), 3, 1);
 
-STF = T2sin(N,L,[0.25*N+1, 0.75*N+1], seq_frames(1,2)); % 2T sin
-
-rx_waveform = chan.tx(STF.waveform);
+rx_waveform = chan.tx(stf.waveform);
 
 % plot(real(rx_waveform));
 plot(abs(fftshift(fft(rx_waveform))));
+
+
