@@ -1,11 +1,13 @@
+clc;
+
 % Channel Model ===========================================================
-    Model   = 'Model-B';
-    dist    = 10;
-    Fc      = 2.4e9;
-    Fs      = 20e6;
-    SNR     = 10;
-    
-    chan = Channel(Model, dist, Fc, Fs, SNR);
+    chan = Channel( ...
+        Model='Model-B', ...
+        dist=10, ...
+        Fc=2.4e9, ...
+        Fs=20e6, ...
+        SNR=10, ... %что то здесь не так
+        CFO=1000);
 %==========================================================================
 
 % Frame format ============================================================
@@ -15,25 +17,35 @@
     Nsymb   = 5;    % num data symbols
     
     % STF format
-        margin1 = 1;
-        margin2 = 1;
-        est_symb = 4;
-        mask_width = 5;
-        det_threshold = 1.0;
-        tones = [0.25*N, 0.75*N]+1;
-
-        stf = STF(N,L, tones, margin1, est_symb, margin2, mask_width, det_threshold);
+        stf = STF( ...
+            N,L, ...
+            Ppos = [0.25, 0.75]*N+1, ...
+            margin1 = 1, ...
+            est_symb = 4, ...
+            margin2 = 1, ...
+            det_mask_width = 5, ...
+            det_threshold = 10.0); %dB
 %==========================================================================
 
 % Init Reciever ===========================================================
-    stf_detector = STF_Detector;
+    stf_detector = STF_Detector(stf, debug=false);
 %==========================================================================
 
-% stf = STF(N,L,[0.25*N, 0.75*N]+1, seq_frames(1,2), 3, 1);
 
 rx_waveform = chan.tx(stf.waveform);
 
-% plot(real(rx_waveform));
+detect = stf_detector.detect(rx_waveform);
+
+fprintf("Frame detected: %d\n", detect);
+
+figure (1);
+clf;
+subplot(2,1,1)
+plot(real(rx_waveform));
+
+subplot(2,1,2)
 plot(abs(fftshift(fft(rx_waveform))));
+
+t = 1:le
 
 
