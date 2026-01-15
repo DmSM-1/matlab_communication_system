@@ -1,0 +1,29 @@
+classdef chan
+
+    properties
+        tgnChannel
+        SNR
+    end
+
+    methods
+        function obj = chan(Model, dist, Fs, SNR)
+            
+            tgnChannel = wlanTGnChannel;
+            tgnChannel.DelayProfile             = Model; 
+            tgnChannel.NumTransmitAntennas      = 1;         
+            tgnChannel.NumReceiveAntennas       = 1;         
+            tgnChannel.TransmitReceiveDistance  = dist;    
+            tgnChannel.LargeScaleFadingEffect   = 'None';
+            tgnChannel.NormalizeChannelOutputs  = false;
+            tgnChannel.SampleRate               = Fs;  
+
+            obj.tgnChannel = tgnChannel;
+            obj.SNR = SNR;
+        end
+
+        function obj = tx(tx_waveform)
+            
+        end
+
+    end
+end

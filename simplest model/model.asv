@@ -1,13 +1,12 @@
 clc;
 
-% нужно добавить случайный сдвиг начала
 % Channel Model ===========================================================
     chan = Channel( ...
         Model='Model-B', ...
         dist=10, ...
         Fc=2.4e9, ...
         Fs=20e6, ...
-        SNR=10, ...
+        SNR=10, ... %что то здесь не так
         CFO=1000);
 %==========================================================================
 
@@ -33,45 +32,48 @@ clc;
             Nsymb = 8);
 %==========================================================================
 
-% Init Reciever
+% Init Reciever ===========================================================
     stf_handler = STF_Handler(stf, debug=false);
     ltf_handler = LTF_Handler(ltf, debug=true);
+%==========================================================================
 
-% Frame generation 
-    tx_waveform = vertcat(stf.waveform, ltf.waveform);
+% Frame generation ========================================================
+tx_waveform = vertcat(1, stf.waveform, ltf.waveform);
+%==========================================================================
 
-% Channel simulation
-    rx_waveform = chan.tx(tx_waveform);
+% Channel simulation ======================================================
+rx_waveform = chan.tx(tx_waveform);
+%==========================================================================
 
 detect = stf_handler.detect(rx_waveform);
 
 fprintf("Frame detected: %d\n", detect);
 
-% Graphs ==================================================================
-    figure(1);
-    clf;
-    spectrogram(rx_waveform, 'yaxis', N);
-    max_val = max(db(rx_waveform));
-    clim([max_val-90, max_val]);
-    
-    figure(2);
-    clf;
-    subplot(2,1,1)
-    plot(real(rx_waveform));
-    
-    subplot(2,1,2)
-    plot(abs(fftshift(fft(rx_waveform))));
-    
-    t = 0:length(rx_waveform)-1;
-    t = t.';
-    rx_waveform = rx_waveform.*exp(-2i*pi*stf_handler.cfo*t);
-    
-    figure(3);
-    clf;
-    subplot(2,1,1)
-    plot(real(rx_waveform));
-    
-    subplot(2,1,2)
-    plot(abs(fftshift(fft(rx_waveform))));
+figure(1);
+clf;
+spectrogram(rx_waveform, 'yaxis', N);
+max_val = max(db(rx_waveform));
+clim([max_val-90, max_val]);
+
+figure(2);
+clf;
+subplot(2,1,1)
+plot(real(rx_waveform));
+
+subplot(2,1,2)
+plot(abs(fftshift(fft(rx_waveform))));
+
+t = 0:length(rx_waveform)-1;
+t = t.';
+rx_waveform = rx_waveform.*exp(-2i*pi*stf_handler.cfo*t);
+
+figure(3);
+clf;
+subplot(2,1,1)
+plot(real(rx_waveform));
+
+subplot(2,1,2)
+plot(abs(fftshift(fft(rx_waveform))));
+
 
 

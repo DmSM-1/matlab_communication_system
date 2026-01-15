@@ -1,0 +1,36 @@
+classdef LTF_Handler
+    
+    properties
+        ltf
+        sto
+        h_ch
+        debug
+    end
+
+    methods
+        function obj = LTF_Handler(ltf, options)
+            arguments
+                ltf 
+                options.debug = false;
+            end
+
+            obj.ltf = ltf;
+            obj.sto = 0;
+            obj.h_ch = [];
+            obj.debug = options.debug;
+        end
+
+        function est = estimate(obj, waveform, options)
+            arguments
+                obj 
+                waveform 
+                options.sto = 0; 
+            end
+            
+            est = false;
+        end
+
+
+
+    end
+end

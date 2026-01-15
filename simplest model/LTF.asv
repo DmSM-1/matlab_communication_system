@@ -1,0 +1,30 @@
+classdef LTF
+
+
+    properties
+        N
+        L
+        symb_len
+        Nsymb
+        waveform
+    end
+
+    methods
+        function obj = LTF(N, L, Nsymb)
+            obj.N = N;
+            obj.L = L;
+            obj.symb_len = N+L;
+            obj.Nsymb = Nsymb;
+            
+            obj.waveform = complex(zeros(obj.Nsymb*obj.symb_len));
+
+            phase = 0.0;
+
+            for i = 1:length(obj.waveform)
+                obj.waveform(i) = exp(1i*pi*phase^2);
+            end    
+
+        end
+
+    end
+end
