@@ -5,6 +5,7 @@ classdef Channel
         SNR
         cfo_shifter
         p_noise
+        max_random_sto
     end
 
     methods
@@ -18,6 +19,7 @@ classdef Channel
                 options.CFO = 0
                 options.PhaseNoiseLevel = [-50 -80 -100] 
                 options.PhaseNoiseFreq  = [100 1000 10000]
+                options.max_random_sto = 1
             end
 
             tgnChannel = wlanTGnChannel;
@@ -42,10 +44,27 @@ classdef Channel
                 'SampleRate', options.Fs);
 
             obj.SNR = options.SNR;
+            obj.max_random_sto = options.max_random_sto;
         end
 
         function rx_waveform = tx(obj, tx_waveform)
-            waveform = [zeros(size(tx_waveform)); tx_waveform; zeros(size(tx_waveform))];
+
+
+            if obj.max_random_sto > 0 
+                waveform = [
+                    zeros(size(tx_waveform)); 
+                    zeros(randi(obj.max_random_sto), 1); 
+                    tx_waveform; 
+                    zeros(size(tx_waveform))
+                ];
+            else
+                waveform = [
+                    zeros(size(tx_waveform)); 
+                    tx_waveform; 
+                    zeros(size(tx_waveform))
+                ];
+            end
+
             waveform = obj.tgnChannel(waveform);
             waveform = obj.cfo_shifter(waveform);
             % waveform = obj.p_noise(waveform);

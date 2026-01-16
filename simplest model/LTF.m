@@ -15,7 +15,7 @@ classdef LTF
             arguments
                 N 
                 L 
-                options.Nsymb = 2
+                options.Nsymb = 4
             end
             
             obj.N = N;
@@ -24,7 +24,7 @@ classdef LTF
             obj.Nsymb = options.Nsymb;
             obj.waveform = complex(zeros(obj.Nsymb*obj.symb_len, 1));
             
-            if obj.Nsymb < 2
+            if obj.Nsymb < 4
                 error('LTF:Invalid Nsymb', 'LTF:Invalid Nsymb');
             end
 
