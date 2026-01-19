@@ -59,31 +59,36 @@ classdef LTF_Handler < handle
 
             obj.sto = max_index+length(obj.ltf.waveform);
 
-            buf = waveform(max_index+1+2*obj.ltf.N:max_index+4*obj.ltf.N);
+            buf = waveform(max_index:max_index+2*obj.ltf.N-1);
             obj.H = fft(buf)./fft(obj.ltf.ref);
             obj.h = ifft(obj.H);
 
             [max_val, max_index] = max(abs(obj.h));
             
-            disp(obj.h_window);
             obj.h(obj.h_window/2+1:end-obj.h_window) = 0;
             obj.H = fft(obj.h);
             obj.H = obj.H(1:2:end);
+            
 
             if obj.debug
                 figure(201);
 
-                subplot(2,1,1);
+                subplot(3,1,1);
                 plot(abs(obj.h));
 
-                subplot(2,1,2);
+                subplot(3,1,2);
                 val = abs(fftshift(obj.H));
                 val = (val/max(val));
                 plot(val);
                 ylim([0, 1]);
+
+                subplot(3,1,3);
+                val = unwrap(angle(fftshift(obj.H)));
+                plot(val);
             end
                       
-            obj.eqv = 1/(obj.H+1e-6);
+            obj.eqv = 1.0./(obj.H+1e-1*exp(1i*pi*angle(obj.H)));
+
             
             est = true;
         end

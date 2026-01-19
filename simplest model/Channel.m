@@ -52,16 +52,16 @@ classdef Channel
 
             if obj.max_random_sto > 0 
                 waveform = [
-                    zeros(size(tx_waveform)); 
+                    zeros(1000,1); 
                     zeros(randi(obj.max_random_sto), 1); 
                     tx_waveform; 
-                    zeros(size(tx_waveform))
+                    zeros(1000,1)
                 ];
             else
                 waveform = [
-                    zeros(size(tx_waveform)); 
+                    zeros(1000,1); 
                     tx_waveform; 
-                    zeros(size(tx_waveform))
+                    zeros(1000,1)
                 ];
             end
 
