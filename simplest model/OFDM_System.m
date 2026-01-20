@@ -6,6 +6,8 @@ classdef OFDM_System < handle
         stf
         ltf
         data_handler
+        Fc
+        Fs
         
         % Конфигурация и пути
         Config
@@ -52,6 +54,9 @@ classdef OFDM_System < handle
                 options.beta (1,1) double = 0.5
                 options.debug (1,1) logical = true
             end
+
+            obj.Fc = options.Fc;
+            obj.Fs = options.Fs;
             
             % 1. Управление директорией (Overwrite / Create)
             obj.OutputDir = options.OutputDir;
@@ -253,6 +258,103 @@ classdef OFDM_System < handle
             fprintf('\n--- Done ---\n');
         end
 
+        function run_sdr_channel_on_dataset(obj)
+            % RUN_CHANNEL_ON_DATASET Сканирует папку OutputDir, находит все
+            % подпапки с номерами (1, 2...), загружает оттуда tx_waveform,
+            % прогоняет через текущий канал и сохраняет rx_waveform.
+
+            fprintf('--- Start SDR Channel on Dataset ---\n');
+            fprintf('Target Directory: %s\n', obj.OutputDir);
+
+            % 1. Сканируем папку на наличие числовых подпапок
+            files = dir(obj.OutputDir);
+            dirFlags = [files.isdir];
+            subDirs = files(dirFlags);
+            folderNames = {subDirs.name};
+            
+            % Убираем '.' и '..'
+            folderNames = folderNames(~ismember(folderNames, {'.', '..'}));
+            
+            % Преобразуем в числа
+            folderNums = str2double(folderNames);
+            validNums = folderNums(~isnan(folderNums));
+            
+            % Сортируем, чтобы обрабатывать по порядку (1, 2, 3...)
+            validNums = sort(validNums);
+
+            if isempty(validNums)
+                warning('No numbered folders found in directory!');
+                return;
+            end
+
+            totalFolders = length(validNums);
+            fprintf('Found %d folders. Processing...\n', totalFolders);
+
+            % 2. Цикл по всем найденным папкам
+            % Используем reverseStr для красивой анимации прогресса в консоли
+            reverseStr = ''; 
+
+            for i = 1:totalFolders
+                folderIdx = validNums(i);
+                
+                % Формируем пути
+                currentDir = fullfile(obj.OutputDir, num2str(folderIdx));
+                txFile = fullfile(currentDir, 'tx_data.mat');
+                rxFile = fullfile(currentDir, 'rx_data.mat');
+                
+                % Проверяем наличие файла с данными передачи
+                if exist(txFile, 'file')
+                    % Загружаем tx_waveform
+                    % load возвращает структуру, берем поле оттуда
+                    loadedData = load(txFile, 'tx_waveform');
+                    
+                    if isfield(loadedData, 'tx_waveform')
+                        % --- ПРОГОН ЧЕРЕЗ КАНАЛ ---
+                        STA1 = py.sdr.SDR( ...
+                            'ip:192.168.3.1', ...
+                            obj.Fc, ...
+                            obj.Fs, ...
+                            tx_cycle_buffer = false, ...
+                            buffer_size = 65536, ...
+                            tx_hardwaregain_chan0 = 0);
+                        
+                        STA2 = py.sdr.SDR( ...
+                            'ip:192.168.4.1', ...
+                            obj.Fc, ...
+                            obj.Fs,...
+                            buffer_size = STA1.buffer_size*100, ...
+                            rx_hardwaregain_chan0 = 50);
+
+                        tx_waveform = (loadedData.tx_waveform).*2^12;
+
+                        tx_waveform = tx_waveform.';
+                        tx_waveform = [zeros(1,25*STA1.buffer_size), tx_waveform];
+                        
+                        STA1.send(tx_waveform);
+                        rx_waveform = reshape(double(STA2.recv()), [], 1);
+
+                        delete(STA1);
+                        delete(STA2);
+                                                
+                        % --- СОХРАНЕНИЕ ---
+                        save(rxFile, 'rx_waveform');
+                    else
+                        fprintf('\nWarning: Folder %d does not contain tx_waveform variable.\n', folderIdx);
+                    end
+                else
+                    fprintf('\nWarning: tx_data.mat not found in folder %d.\n', folderIdx);
+                end
+                
+                % Вывод прогресса
+                msg = sprintf('Processed: %d / %d (Folder ID: %d)', i, totalFolders, folderIdx);
+                fprintf([reverseStr, msg]);
+                reverseStr = repmat('\b', 1, length(msg));
+            end
+            
+            fprintf('\n--- Done ---\n');
+        end
+
+
         function generate_dataset(obj, num_frames)
             arguments
                 obj
@@ -342,8 +444,8 @@ classdef OFDM_System < handle
             % DATA_Handler уже является частью obj, используем его
             
             % Заголовок таблицы
-            fprintf('| %4s | %8s | %8s | %8s | %s |\n', 'ID', 'BER', 'RMSE', 'CFO', 'Status');
-            fprintf('|%s|\n', repmat('-', 1, 46));
+            fprintf('| %4s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR', 'BER', 'RMSE', 'CFO', 'Status');
+            fprintf('|%s|\n', repmat('-', 1, 56));
 
             total_ber = 0;
             total_rmse = 0;
@@ -359,7 +461,7 @@ classdef OFDM_System < handle
                 
                 % Проверка наличия файлов
                 if ~exist(rxFile, 'file') || ~exist(txFile, 'file')
-                    fprintf('| %4d | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', 'NO FILE');
+                    fprintf('| %4d | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', 'NO FILE');
                     continue;
                 end
                 
@@ -376,7 +478,7 @@ classdef OFDM_System < handle
                 detect = stf_h.detect(rx_waveform);
                 
                 if ~detect
-                    fprintf('| %4d | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', 'FAIL:STF');
+                    fprintf('| %4d | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', 'FAIL:STF');
                     continue;
                 end
                 
@@ -395,7 +497,7 @@ classdef OFDM_System < handle
                 est = ltf_h.estimate(rx_frame);
                 
                 if ~est
-                     fprintf('| %4d | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', stf_h.cfo, 'FAIL:LTF');
+                     fprintf('| %4d | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
                      continue;
                 end
                 
@@ -433,8 +535,8 @@ classdef OFDM_System < handle
                 
                 % Вывод
                  % 1. Вывод в консоль
-                fprintf('| %4d | %8.5f | %8.4f | %8.2e | %s |\n', ...
-                    folderIdx, ber, rmse, stf_h.cfo, 'OK');
+                fprintf('| %4d | %8.5f | %8.5f | %8.4f | %8.2e | %s |\n', ...
+                    folderIdx, stf_h.snr, ber, rmse, stf_h.cfo, 'OK');
                 
                 total_ber = total_ber + ber;
                 total_rmse = total_rmse + rmse;
@@ -452,10 +554,10 @@ classdef OFDM_System < handle
                 if fid ~= -1
                     % Если это первый успешный пакет, пишем заголовок
                     if valid_count == 1
-                        fprintf(fid, 'FolderID,BER,RMSE,CFO_Est\n');
+                        fprintf(fid, 'FolderID,SNR,BER,RMSE,CFO_Est\n');
                     end
                     % Пишем данные
-                    fprintf(fid, '%d,%.6f,%.6f,%.6e\n', folderIdx, ber, rmse, stf_h.cfo);
+                    fprintf(fid, '%d,%.6f,%.6f,%.6f,%.6e\n', folderIdx, stf_h.snr, ber, rmse, stf_h.cfo);
                     fclose(fid);
                 end
 
@@ -497,7 +599,7 @@ classdef OFDM_System < handle
             end
             
             if valid_count > 0
-                fprintf('|%s|\n', repmat('-', 1, 46));
+                fprintf('|%s|\n', repmat('-', 1, 56));
                 fprintf('Avg BER: %e | Avg RMSE: %f\n', total_ber/valid_count, total_rmse/valid_count);
             end
         end
