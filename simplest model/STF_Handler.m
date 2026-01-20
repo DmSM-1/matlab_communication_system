@@ -18,6 +18,7 @@ classdef STF_Handler < handle
         detected
         buf
         debug
+        snr
     end
 
     methods
@@ -34,6 +35,7 @@ classdef STF_Handler < handle
             obj.stage = 0;
             obj.detected = 0;
             obj.buf = [];
+            obj.snr = 0;
             obj.debug = options.debug;
         end
 
@@ -60,6 +62,7 @@ classdef STF_Handler < handle
                 noise_power = noise_power/(obj.stf.N-det_mask_weight);
 
                 SNR = db(pilot_power/noise_power);
+                obj.snr = SNR;
                 
                 if obj.debug 
                     fprintf("Symb:%4d Stage %d SNR(dB) %3.3f \n", i, obj.stage, SNR); 

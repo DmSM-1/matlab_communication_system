@@ -119,12 +119,13 @@ classdef DATA_Handler < handle
             obj.mod_data = qammod(obj.data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
             obj.mod_data = reshape(obj.mod_data, obj.Ndat, []);
 
-            obj.waveform = [];
+            obj.waveform = complex(zeros(obj.N+obj.L, obj.Nsymb));
 
             for i = 1:obj.Nsymb
-                val = obj.ofdmMod(obj.mod_data(:, i), pilots(:, i));
-                obj.waveform = [obj.waveform; val];
+                obj.waveform(:, i) = obj.ofdmMod(obj.mod_data(:, i), pilots(:, i));
             end
+
+            obj.waveform = obj.waveform(:);
             
             obj.waveform = obj.waveform./sqrt((mean(abs(obj.waveform.^2))));
             waveform = obj.waveform;
@@ -137,7 +138,7 @@ classdef DATA_Handler < handle
             eqv = obj.eqv;
         end
 
-        function data = get_data(obj, waveform)
+        function [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = get_data(obj, waveform)
 
             waveform = reshape(waveform, [], obj.Nsymb);
             ifft_data = complex(zeros(obj.Ndat+obj.Npil, obj.Nsymb));
@@ -146,23 +147,23 @@ classdef DATA_Handler < handle
                 ifft_data(:, i) = obj.ofdmDemod(waveform(:, i)); 
             end
 
-            eqv_data = zeros(size(ifft_data));
+            rx_eqv_data = zeros(size(ifft_data));
             indices = (1:obj.Ndat+obj.Npil).';
 
 
             for i = 1:obj.Nsymb
-                eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
+                rx_eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
 
-                pilot_eqv = eqv_data(obj.eqv_pilotIdx, i);
+                pilot_eqv = rx_eqv_data(obj.eqv_pilotIdx, i);
                 pilot_eqv = interp1(obj.eqv_pilotIdx, pilot_eqv, indices, 'linear', 'extrap');
                 pilot_eqv = (1-obj.alpha)*ones(size(pilot_eqv))+obj.alpha*pilot_eqv;
                 pilot_eqv = 1.0./(pilot_eqv+1e-6*exp(1i*pi*angle(pilot_eqv)));
 
-                eqv_data(:, i) = eqv_data(:, i).*pilot_eqv;
-                eqv_pilots = eqv_data(obj.eqv_pilotIdx, i);
-                eqv_data(:, i) = eqv_data(:, i)./sqrt(mean(abs(eqv_pilots.^2)));
+                rx_eqv_data(:, i) = rx_eqv_data(:, i).*pilot_eqv;
+                rx_eqv_pilots = rx_eqv_data(obj.eqv_pilotIdx, i);
+                rx_eqv_data(:, i) = rx_eqv_data(:, i)./sqrt(mean(abs(rx_eqv_pilots.^2)));
                 
-                rx_res_data = eqv_data(:, i);
+                rx_res_data = rx_eqv_data(:, i);
                 rx_res_data(obj.eqv_pilotIdx, :) = [];
                 rx_res_data = qamdemod(rx_res_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
                 rx_res_data = reshape(rx_res_data, [], 1);
@@ -176,37 +177,32 @@ classdef DATA_Handler < handle
 
             end
 
-            eqv_pilots = eqv_data(obj.eqv_pilotIdx, :);
-            eqv_data(obj.eqv_pilotIdx, :) = [];
-
-
-            rx_res_data = qamdemod(eqv_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
+            rx_eqv_pilots = rx_eqv_data(obj.eqv_pilotIdx, :);
+            rx_eqv_data(obj.eqv_pilotIdx, :) = [];
+            rx_res_data = qamdemod(rx_eqv_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
             rx_res_data = reshape(rx_res_data, [], 1);
 
-            if obj.debug
-                ber = mean(xor(rx_res_data,obj.data));
-                mod_mse = sqrt(mean(abs(eqv_data(:)-obj.mod_data(:)).^2));
-                fprintf("BER:  %f\nRMSE: %f\n", ber, mod_mse);
-
-                ifft_data = ifft_data./sqrt(mean(abs(ifft_data.^2)));
-
-                % figure(1);
-                % clf;
-                nexttile;
-                scatter(real(ifft_data(:)), imag(ifft_data(:)), 3, 'blue', c='.');
-                hold("on");
-                scatter(real(eqv_data(:).'), imag(eqv_data(:).'), 3, 'red', c='.');
-                hold("on");
-                scatter(real(eqv_pilots(:).'), imag(eqv_pilots(:).'), 7, 'green', c='.');
-
-                xlim([-2, 2]);
-                ylim([-2, 2]);
-                axis("square");
-
-            end
-
-            data = rx_res_data;
-
+            % if obj.debug
+            %     ber = mean(xor(rx_res_data,obj.data));
+            %     mod_mse = sqrt(mean(abs(rx_eqv_data(:)-obj.mod_data(:)).^2));
+            %     fprintf("BER:  %f\nRMSE: %f\n", ber, mod_mse);
+            % 
+            %     ifft_data = ifft_data./sqrt(mean(abs(ifft_data.^2)));
+            % 
+            %     % figure(1);
+            %     % clf;
+            %     nexttile;
+            %     scatter(real(ifft_data(:)), imag(ifft_data(:)), 3, 'blue', c='.');
+            %     hold("on");
+            %     scatter(real(rx_eqv_data(:).'), imag(rx_eqv_data(:).'), 3, 'red', c='.');
+            %     hold("on");
+            %     scatter(real(rx_eqv_pilots(:).'), imag(rx_eqv_pilots(:).'), 7, 'green', c='.');
+            % 
+            %     xlim([-2, 2]);
+            %     ylim([-2, 2]);
+            %     axis("square");
+            % 
+            % end
         end    
 
     end

@@ -40,7 +40,7 @@ clc;
             Mod_pow=4, ...
             Cod_rate=1, ...
             alpha=0.5, ...
-            beta=0.1, ...
+            beta=0.5, ...
             debug=true);
 
 %==========================================================================
@@ -54,11 +54,6 @@ clc;
         ltf, ...
         h_window=4*L, ...
         debug=false);
-
-    %Init Graph
-        figure(1);
-        clf;
-        t = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 %==========================================================================
 
 % Frame generation 
@@ -84,40 +79,32 @@ clc;
     
 % state 3 - data
     eqv = data_handler.set_eqv(ltf_handler);
-    res_data = data_handler.get_data(rx_data_waveform);
+    [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = data_handler.get_data(rx_data_waveform);
 
-    ber = mean(xor(res_data,source));
-% Graphs ==================================================================
+% Results =================================================================
+ber  = mean(xor(rx_res_data, data_handler.data));
+rmse = sqrt(mean(abs(rx_eqv_data(:)-data_handler.mod_data(:)).^2));
+
+fprintf("BER:  %f\nRMSE: %f\n", ber, rmse);
+
+figure(1);
+clf;
+t = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+
 nexttile;
 spectrogram(rx_waveform, N, [], 'yaxis', 'centered');
 max_val = max(db(rx_waveform));
 clim([max_val-50, max_val]);
 
+ifft_data = ifft_data./sqrt(mean(abs(ifft_data.^2)));
 
-% pbaspect([16 9 1]);
-% axis()
+nexttile;
+scatter(real(ifft_data(:)), imag(ifft_data(:)), 3, 'blue', c='.');
+hold("on");
+scatter(real(rx_eqv_data(:).'), imag(rx_eqv_data(:).'), 3, 'red', c='.');
+hold("on");
+scatter(real(rx_eqv_pilots(:).'), imag(rx_eqv_pilots(:).'), 7, 'green', c='.');
 
-% figure(1);
-% clf;
-% subplot(2,1,1)
-% plot(real(rx_waveform));
-% 
-% subplot(2,1,2)
-% spectrogram(rx_waveform, N, [], 'yaxis', 'centered');
-% max_val = max(db(rx_waveform));
-% clim([max_val-50, max_val]);
-
-% figure(2)
-% clf;
-% plot(abs(fftshift(fft(rx_waveform))));
-
-% figure(3);
-% clf;
-% subplot(2,1,1)
-% plot(real(rx_detected_frame));
-% 
-% subplot(2,1,2)
-% spectrogram(rx_detected_frame, N, [], 'yaxis', 'centered');
-% max_val = max(db(rx_detected_frame));
-% clim([max_val-50, max_val]);
-
+xlim([-2, 2]);
+ylim([-2, 2]);
+axis("square");
