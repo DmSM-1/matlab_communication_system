@@ -24,6 +24,7 @@ classdef DATA_Handler < handle
         waveform
         
         eqv
+        ang
 
         debug
 
@@ -40,13 +41,13 @@ classdef DATA_Handler < handle
                 options.N = 64;
                 options.L = 16;
                 options.Ndat = 48;
+                options.Bw = 0.5;
                 options.Npil = 2;
-
                 options.Mod_pow = 1;
                 options.Nsymb = 1;
                 options.Cod_rate = 1;
-                options.alpha = 0.1;
-                options.beta = 0.1;
+                options.alpha = 0.5;
+                options.beta = 0.2;
 
                 options.debug = false;
             end
@@ -97,6 +98,7 @@ classdef DATA_Handler < handle
             obj.data = [];
             obj.mod_data = [];
             obj.waveform = [];
+            obj.ang = zeros(obj.Nsymb, 1);
 
             obj.eqv = complex(ones(obj.N, 1));
 
@@ -165,15 +167,20 @@ classdef DATA_Handler < handle
                 
                 rx_res_data = rx_eqv_data(:, i);
                 rx_res_data(obj.eqv_pilotIdx, :) = [];
-                rx_res_data = qamdemod(rx_res_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
-                rx_res_data = reshape(rx_res_data, [], 1);
+                rx_res_bin_data = qamdemod(rx_res_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
+                rx_res_bin_data = reshape(rx_res_bin_data, [], 1);
                 
                 pilots = pskmod(zeros(obj.Npil, 1), 2);
-                rx_res_data = qammod(rx_res_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
+                rx_mod_res_data = qammod(rx_res_bin_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
                 
-                new_H = ifft_data(:, i)./obj.ofdmDemod(obj.ofdmMod(rx_res_data, pilots));
+                rx_demod_res_data = obj.ofdmDemod(obj.ofdmMod(rx_mod_res_data, pilots));
+
+                deviation = (abs(rx_eqv_data(:, i)-rx_demod_res_data));
+                deviation = 1./(deviation+1);
+
+                new_H = ifft_data(:, i)./rx_demod_res_data;
                 new_eqv = 1.0./(new_H+1e-1*exp(1i*pi*angle(new_H)));
-                obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
+                obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);%.*deviation;
 
             end
 

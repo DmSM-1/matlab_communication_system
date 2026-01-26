@@ -15,7 +15,7 @@ classdef Channel
                 options.dist = 10
                 options.Fc = 2.4e9 
                 options.Fs = 20e6 
-                options.SNR = 50
+                options.SNR = 100
                 options.CFO = 0
                 options.PhaseNoiseLevel = [-50 -80 -100] 
                 options.PhaseNoiseFreq  = [100 1000 10000]

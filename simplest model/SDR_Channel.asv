@@ -1,0 +1,40 @@
+clc;
+
+Fc = 2.4e9;
+Fs = 5e6;
+
+STA1 = py.sdr.SDR( ...
+    'ip:192.168.3.1', ...
+    Fc, ...
+    Fs, ...
+    tx_cycle_buffer = false, ...
+    buffer_size = 65536, ...
+    tx_hardwaregain_chan0 = 0);
+
+
+STA2 = py.sdr.SDR( ...
+    'ip:192.168.4.1', ...
+    Fc, ...
+    buffer_size = STA1.buffer_size*100, ...
+    rx_hardwaregain_chan0 = 50);
+
+
+tx_waveform = load('Datasets/1/tx_data.mat', 'tx_waveform').tx_waveform;
+tx_waveform = tx_waveform.*2^12;
+
+figure(1);
+clf;
+plot(abs(tx_waveform));
+
+tx_waveform = tx_waveform.';
+tx_waveform = [zeros(1,25*STA1.buffer_size), tx_waveform];
+
+STA1.send(tx_waveform);
+rx_waveform = reshape(double(STA2.recv()), [], 1);
+
+figure(2);
+clf;
+plot(abs(rx_waveform));
+
+
+

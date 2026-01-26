@@ -3,6 +3,7 @@ classdef LTF_Handler < handle
     properties
         ltf
         sto
+        sfo
         h
         H
         eqv
@@ -20,6 +21,7 @@ classdef LTF_Handler < handle
 
             obj.ltf = ltf;
             obj.sto = 0;
+            obj.sfo = 0;
             obj.h = [];
             obj.H = [];
             obj.eqv = [];
@@ -63,11 +65,32 @@ classdef LTF_Handler < handle
             obj.H = fft(buf)./fft(obj.ltf.ref);
             obj.h = ifft(obj.H);
 
-            [max_val, max_index] = max(abs(obj.h));
+            [max_val, ~] = max(abs(obj.h));
             
             obj.h(obj.h_window/2+1:end-obj.h_window) = 0;
             obj.H = fft(obj.h);
             obj.H = obj.H(1:2:end);
+            
+            %sfo estimation
+            % buf = waveform(max_index:max_index+obj.ltf.Nsymb*obj.ltf.N-1);
+            % buf = reshape(buf, 2*obj.ltf.N, []);
+            % buf = fft(buf)./fft(obj.ltf.ref);
+            % buf = fftshift(buf);
+            % buf = unwrap(angle(buf));
+            % 
+            % x = 1:2*obj.ltf.N;
+            % x = x.';
+            % 
+            % a = zeros(obj.ltf.Nsymb/2,1);
+            % for i = 1:obj.ltf.Nsymb/2
+            %     b = polyfit(x, buf(:,i), 1);
+            %     a(i,1) = b(1);
+            % end
+            % 
+            % figure(7);
+            % plot(buf);
+
+            
             
 
             if obj.debug

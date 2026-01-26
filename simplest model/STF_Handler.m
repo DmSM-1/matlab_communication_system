@@ -61,14 +61,14 @@ classdef STF_Handler < handle
                 pilot_power = pilot_power/det_mask_weight;
                 noise_power = noise_power/(obj.stf.N-det_mask_weight);
 
-                SNR = db(pilot_power/noise_power);
+                SNR = 10*log10(pilot_power/noise_power);
                 obj.snr = SNR;
                 
                 if obj.debug 
                     fprintf("Symb:%4d Stage %d SNR(dB) %3.3f \n", i, obj.stage, SNR); 
                 end
 
-                if SNR < obj.stf.det_threshold && obj.stage ~= 4
+                if SNR < obj.stf.det_threshold %&& obj.stage ~= 4
                     obj.detected = 0;
                     obj.stage = 0;
                     continue;
