@@ -8,6 +8,7 @@ classdef LTF
         Nsymb
         waveform
         ref
+        sto_shift
     end
 
     methods
@@ -16,6 +17,7 @@ classdef LTF
                 N 
                 L 
                 options.Nsymb = 4
+                options.sto_shift = 0
             end
             
             obj.N = N;
@@ -23,7 +25,8 @@ classdef LTF
             obj.symb_len = N+L;
             obj.Nsymb = options.Nsymb;
             obj.waveform = complex(zeros(obj.Nsymb*obj.symb_len, 1));
-            
+            obj.sto_shift = options.sto_shift;
+
             if obj.Nsymb < 4 || mod(obj.Nsymb,2) 
                 error('LTF:Invalid Nsymb', 'LTF:Invalid Nsymb');
             end

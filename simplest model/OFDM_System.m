@@ -11,6 +11,7 @@ classdef OFDM_System < handle
         
         % Конфигурация и пути
         Config
+        sdr_order
         OutputDir % Путь к папке результатов
     end
 
@@ -30,7 +31,7 @@ classdef OFDM_System < handle
                 options.dist (1,1) double = 10
                 options.Fc (1,1) double = 2.4e9
                 options.SNR (1,1) double = 100
-                options.CFO (1,1) double = 1000
+                options.CFO (1,1) double = 10000
                 options.max_random_sto (1,1) double = 10000
                 
                 % --- STF Parameters ---
@@ -39,10 +40,11 @@ classdef OFDM_System < handle
                 options.stf_est_symb (1,1) double = 4
                 options.stf_margin2 (1,1) double = 1
                 options.stf_mask_width (1,1) double = 30
-                options.stf_threshold (1,1) double = 10.0
+                options.stf_threshold (1,1) double = 7.0
                 
                 % --- LTF Parameters ---
                 options.ltf_Nsymb (1,1) double = 8
+                options.ltf_sto_shift (1,1) int32 = 0
                 
                 % --- Data Parameters ---
                 options.Bw (1,1) double = 0.5
@@ -54,12 +56,15 @@ classdef OFDM_System < handle
                 options.alpha (1,1) double = 0.5
                 options.beta (1,1) double = 0.5
                 options.debug (1,1) logical = true
-                options.guards = [];
+                options.guards = []
                 options.DC_guard (1,1) int32 = 1
+
+                options.sdr_order (1,1) int32 = 1
             end
 
             obj.Fc = options.Fc;
             obj.Fs = options.Fs;
+            obj.sdr_order = options.sdr_order;
             
             % 1. Управление директорией (Overwrite / Create)
             obj.OutputDir = options.OutputDir;
@@ -112,8 +117,23 @@ classdef OFDM_System < handle
 
             obj.ltf = LTF( ...
                 options.N, options.L, ...
-                Nsymb = options.ltf_Nsymb ...
+                Nsymb = options.ltf_Nsymb, ...
+                sto_shift=options.ltf_sto_shift ...
             );
+
+            % obj.data_handler = DATA_Handler( ...
+            %     N        = options.N, ...
+            %     L        = options.L, ...
+            %     Bw       = options.Bw, ...
+            %     Npil     = options.Npil, ...
+            %     Ndat     = options.Ndat, ...
+            %     Nsymb    = options.data_Nsymb, ...
+            %     Mod_pow  = options.Mod_pow, ...
+            %     Cod_rate = options.Cod_rate, ...
+            %     alpha    = options.alpha, ...
+            %     beta     = options.beta, ...
+            %     debug    = options.debug ...
+            % );
             
             obj.data_handler = DATA_Handler_1( ...
                 N        = options.N, ...
@@ -328,11 +348,16 @@ classdef OFDM_System < handle
                     % Загружаем tx_waveform
                     % load возвращает структуру, берем поле оттуда
                     loadedData = load(txFile, 'tx_waveform');
-                    
+                    adr = ['ip:192.168.4.1'; 'ip:192.168.3.1'];
+
+                    if obj.sdr_order
+                        adr = ['ip:192.168.3.1'; 'ip:192.168.4.1'];
+                    end
+
                     if isfield(loadedData, 'tx_waveform')
                         % --- ПРОГОН ЧЕРЕЗ КАНАЛ ---
                         STA1 = py.sdr.SDR( ...
-                            'ip:192.168.3.1', ...
+                            adr(1,:), ...
                             obj.Fc, ...
                             obj.Fs, ...
                             tx_cycle_buffer = false, ...
@@ -341,9 +366,9 @@ classdef OFDM_System < handle
                             rx_hardwaregain_chan0 = 50);
                         
                         STA2 = py.sdr.SDR( ...
-                            'ip:192.168.4.1', ...
-                            obj.Fc, ...
-                            obj.Fs+35,...
+                            adr(2,:), ...
+                            obj.Fc, ... 
+                            obj.Fs,...%+35, ...
                             buffer_size = STA1.buffer_size*100, ...
                             tx_hardwaregain_chan0 = 0, ...
                             rx_hardwaregain_chan0 = 50);
@@ -426,7 +451,7 @@ classdef OFDM_System < handle
                 % Вызываем генерацию одного кадра
                 % Передаем 'i' в качестве seed, чтобы кадры были разными,
                 % но воспроизводимыми
-                obj.generate_frame(i);
+                obj.generate_frame();
                 
                 % Готовим строку удаления для следующего шага
                 reverseStr = repmat('\b', 1, length(msg));
@@ -546,13 +571,14 @@ classdef OFDM_System < handle
                 obj.data_handler.data     = tx_struct.source_bits;
                 
                 [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav);
+                % [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data_with_ideal(rx_data_wav, tx_struct.source_bits);
                 % --- СТАТИСТИКА ---
                 
                 % BER
                 L_bits = min(length(rx_res_data), length(tx_struct.source_bits));
                 error = xor(rx_res_data(1:L_bits), tx_struct.source_bits(1:L_bits));
                 error = reshape(error, obj.data_handler.Mod_pow, []);
-                error = mean(error);
+                error = mean(error, 1);
                 error = reshape(error, obj.data_handler.Ndat, []);
                 error = error.';
                 ber = mean(error);
@@ -561,26 +587,24 @@ classdef OFDM_System < handle
                 % plot(ber);
 
                 
-                figure(6)
-                plot(obj.data_handler.ang);
+                % figure(6)
+                % plot(obj.data_handler.ang);
 
-                figure(4);
-                subplot(2,1,1);
+                figure(1);
+                subplot(2,2,1);
                 plot(abs(ltf_eqv));
-                subplot(2,1,2);
-                plot(unwrap(angle(ltf_eqv)));
                 title("LTF Chan prob");
+                subplot(2,2,3);
+                plot(unwrap(angle(ltf_eqv)));
 
-                figure(5);
-                subplot(2,1,1);
+                subplot(2,2,2);
                 plot(abs(obj.data_handler.eqv));
-                subplot(2,1,2);
-                plot(unwrap(angle(obj.data_handler.eqv)));
                 title("Last symb Chan prob");
+                subplot(2,2,4);
+                plot(unwrap(angle(obj.data_handler.eqv)));
 
 
                 ber = mean(ber);
-                % ber = mean(xor(rx_res_data(1:L_bits), tx_struct.source_bits(1:L_bits)));
                 
                 % RMSE
                 L_syms = min(length(rx_eqv_data), length(tx_struct.tx_mod_symbols));
@@ -615,7 +639,7 @@ classdef OFDM_System < handle
                 end
 
                 % 4. Построение и сохранение графика
-                hFig = figure(1);
+                hFig = figure(2);
                 % set(hFig, 'Visible', 'off'); % Раскомментируйте, чтобы окна не мелькали
                 clf(hFig);
                 
@@ -650,7 +674,7 @@ classdef OFDM_System < handle
                 plotPath = fullfile(currentDir, 'analysis_plot.png');
                 exportgraphics(hFig, plotPath, 'Resolution', 300);
 
-                eFig = figure(2);
+                eFig = figure(3);
                 clf(eFig);
 
                 error = abs(rx_eqv_data - tx_struct.tx_mod_symbols);
@@ -663,6 +687,11 @@ classdef OFDM_System < handle
                 ylabel('Frequency / Range');
                 zlim([0,1]);
                 clim([0, 1]);
+
+                figure(4)
+                plot(obj.data_handler.ang);
+
+                
 
             end
             

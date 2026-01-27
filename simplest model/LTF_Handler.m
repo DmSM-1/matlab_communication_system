@@ -16,6 +16,7 @@ classdef LTF_Handler < handle
             arguments
                 ltf 
                 options.h_window = ltf.L;
+                options.sto_shift = -ltf.L/2;
                 options.debug = false;
             end
 
@@ -59,39 +60,20 @@ classdef LTF_Handler < handle
                 fprintf("Max val: %f index %d\n", max_val, max_index);
             end
 
-            obj.sto = max_index+length(obj.ltf.waveform);
+            obj.sto = max_index+length(obj.ltf.waveform)+obj.ltf.sto_shift;
 
-            buf = waveform(max_index:max_index+2*obj.ltf.N-1);
+            buf = waveform(max_index+2*obj.ltf.N:max_index+4*obj.ltf.N-1);
             obj.H = fft(buf)./fft(obj.ltf.ref);
             obj.h = ifft(obj.H);
 
             [max_val, ~] = max(abs(obj.h));
             
             obj.h(obj.h_window/2+1:end-obj.h_window) = 0;
+
+            obj.h = circshift(obj.h, -obj.ltf.sto_shift);
             obj.H = fft(obj.h);
             obj.H = obj.H(1:2:end);
-            
-            %sfo estimation
-            % buf = waveform(max_index:max_index+obj.ltf.Nsymb*obj.ltf.N-1);
-            % buf = reshape(buf, 2*obj.ltf.N, []);
-            % buf = fft(buf)./fft(obj.ltf.ref);
-            % buf = fftshift(buf);
-            % buf = unwrap(angle(buf));
-            % 
-            % x = 1:2*obj.ltf.N;
-            % x = x.';
-            % 
-            % a = zeros(obj.ltf.Nsymb/2,1);
-            % for i = 1:obj.ltf.Nsymb/2
-            %     b = polyfit(x, buf(:,i), 1);
-            %     a(i,1) = b(1);
-            % end
-            % 
-            % figure(7);
-            % plot(buf);
 
-            
-            
 
             if obj.debug
                 figure(201);
@@ -110,9 +92,8 @@ classdef LTF_Handler < handle
                 plot(val);
             end
                       
-            obj.eqv = 1.0./(obj.H+1e-1*exp(1i*pi*angle(obj.H)));
+            obj.eqv = 1.0./(obj.H+1e-6*exp(1i*pi*angle(obj.H)));
 
-            
             est = true;
         end
 

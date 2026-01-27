@@ -142,12 +142,16 @@ classdef DATA_Handler < handle
 
         function [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = get_data(obj, waveform)
 
-            waveform = reshape(waveform, [], obj.Nsymb);
+            % waveform = reshape(waveform, [], obj.Nsymb);
             ifft_data = complex(zeros(obj.Ndat+obj.Npil, obj.Nsymb));
 
+            iter = 0;
             for i = 1:obj.Nsymb
-                ifft_data(:, i) = obj.ofdmDemod(waveform(:, i)); 
+                ifft_data(:, i) = obj.ofdmDemod(waveform(iter+1:iter+(obj.N+obj.L))); 
+                iter = iter+(obj.N+obj.L);
             end
+            % waveform(iter+1:iter+(obj.N+obj.L)
+            % ifft_data(:, i) = obj.ofdmDemod(waveform(:, i)); 
 
             rx_eqv_data = zeros(size(ifft_data));
             indices = (1:obj.Ndat+obj.Npil).';

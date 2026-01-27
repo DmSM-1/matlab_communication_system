@@ -6,6 +6,7 @@ classdef Channel
         cfo_shifter
         p_noise
         max_random_sto
+        awgn_only
     end
 
     methods
@@ -20,19 +21,24 @@ classdef Channel
                 options.PhaseNoiseLevel = [-50 -80 -100] 
                 options.PhaseNoiseFreq  = [100 1000 10000]
                 options.max_random_sto = 1
+                options.awgn_only = false
             end
 
-            tgnChannel = wlanTGnChannel;
-            tgnChannel.DelayProfile             = options.Model; 
-            tgnChannel.NumTransmitAntennas      = 1;         
-            tgnChannel.NumReceiveAntennas       = 1;         
-            tgnChannel.TransmitReceiveDistance  = options.dist;    
-            tgnChannel.LargeScaleFadingEffect   = 'None';
-            tgnChannel.NormalizeChannelOutputs  = false;
-            tgnChannel.CarrierFrequency         = options.Fc;
-            tgnChannel.SampleRate               = options.Fs;  
-
-            obj.tgnChannel = tgnChannel;
+            if options.Model == "awgn"
+                options.awgn_only = true;
+            else
+                tgnChannel = wlanTGnChannel;
+                tgnChannel.DelayProfile             = options.Model; 
+                tgnChannel.NumTransmitAntennas      = 1;         
+                tgnChannel.NumReceiveAntennas       = 1;         
+                tgnChannel.TransmitReceiveDistance  = options.dist;    
+                tgnChannel.LargeScaleFadingEffect   = 'None';
+                tgnChannel.NormalizeChannelOutputs  = false;
+                tgnChannel.CarrierFrequency         = options.Fc;
+                tgnChannel.SampleRate               = options.Fs;  
+    
+                obj.tgnChannel = tgnChannel;
+            end
 
             obj.cfo_shifter = comm.PhaseFrequencyOffset(...
                 'FrequencyOffset', options.CFO, ...
@@ -45,6 +51,7 @@ classdef Channel
 
             obj.SNR = options.SNR;
             obj.max_random_sto = options.max_random_sto;
+            obj.awgn_only = options.awgn_only;
         end
 
         function rx_waveform = tx(obj, tx_waveform)
@@ -64,9 +71,11 @@ classdef Channel
                     zeros(1000,1)
                 ];
             end
-
-            waveform = obj.tgnChannel(waveform);
-            waveform = obj.cfo_shifter(waveform);
+            
+            if ~obj.awgn_only
+                waveform = obj.tgnChannel(waveform);
+                waveform = obj.cfo_shifter(waveform);
+            end
             % waveform = obj.p_noise(waveform);
             waveform = awgn(waveform,obj.SNR,'measured');
             rx_waveform = waveform;
