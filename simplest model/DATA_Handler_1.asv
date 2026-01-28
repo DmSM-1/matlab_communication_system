@@ -137,20 +137,30 @@ classdef DATA_Handler_1 < handle
             for i = 1:obj.Nsymb
                 [~, ~, pilots(:, i)] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
                 iter = iter+(obj.N+obj.L);
-
-                val = polyfit(obj.eqv_pilotIdx, angle(pilots(:, i)), 1);
-                obj.ang(i,1) = val(2);
             end
 
-            figure(5);
-            plot(obj.ang);
+            pilots = unwrap(angle(pilots.'));
+            pilots = mean(pilots, 2);
 
-            dp = median(diff(obj.ang))/(obj.N+obj.L);
+            figure(4);
+            clf;
+            plot(pilots);
+            hold("on")
 
+            x = double(1:obj.Nsymb);
+            x = x.';
+            p = polyfit(x, pilots, 3);
+            pilots = polyval(p, x);
+
+            plot(pilots);
+
+            dp = [0;diff(pilots)];
             phase = 0;
-            for i = 1:length(waveform)
-                phase = phase + dp;
-                waveform(i) = waveform(i)*exp(-1i*phase);
+            for i = 1:obj.Nsymb
+                for j = 1:(obj.N+obj.L)
+                    phase = phase + dp(i);
+                    waveform(i*(obj.N+obj.L)+j) = waveform(i*(obj.N+obj.L)+j)*exp(-1i*phase);
+                end
             end
             
             
@@ -181,7 +191,8 @@ classdef DATA_Handler_1 < handle
 
                 new_H = ifft_data(:, i)./rx_demod_res_data;
                 
-                new_eqv = 1.0./(new_H+1e-6*exp(1i*pi*angle(new_H)));
+                % new_eqv = 1.0./(new_H+1e-6*exp(1i*pi*angle(new_H)));
+                new_eqv = conj(new_H)./(abs(new_H.^2)+1e-6);
                 obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
 
                 val = polyfit(obj.eqv_pilotIdx, angle(conj(obj.eqv(obj.eqv_pilotIdx))), 1);
@@ -196,7 +207,7 @@ classdef DATA_Handler_1 < handle
 
         end
 
-        function [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = get_data_with_ideal(obj, waveform, source)
+        function [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = ideal_get_data(obj, waveform, source)
             ifft_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
             pilots = complex(zeros(obj.Npil, obj.Nsymb));
             rx_eqv_data = zeros(size(ifft_data));
@@ -236,20 +247,14 @@ classdef DATA_Handler_1 < handle
                 rx_eqv_pilots = rx_eqv_data(obj.eqv_pilotIdx, i);
                 rx_eqv_data(:, i) = rx_eqv_data(:, i)./sqrt(mean(abs(rx_eqv_pilots.^2)));
                 
-                rx_res_data = rx_eqv_data(obj.dataIdx, i);
-                rx_res_bin_data = qamdemod(rx_res_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
-                rx_res_bin_data = reshape(rx_res_bin_data, [], 1);
-
-                erro
-                
                 pilots = pskmod(zeros(obj.Npil, 1), 2);
-                rx_mod_res_data = qammod(rx_res_bin_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
+                rx_mod_res_data = qammod(source(:,i), 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
                 
                 [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
 
                 new_H = ifft_data(:, i)./rx_demod_res_data;
                 
-                new_eqv = 1.0./(new_H+1e-6*exp(1i*pi*angle(new_H)));
+                new_eqv = conj(new_H)./(abs(new_H.^2)+1e-6);
                 obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
 
                 val = polyfit(obj.eqv_pilotIdx, angle(conj(obj.eqv(obj.eqv_pilotIdx))), 1);

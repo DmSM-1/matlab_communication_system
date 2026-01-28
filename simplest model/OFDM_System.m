@@ -121,21 +121,8 @@ classdef OFDM_System < handle
                 sto_shift=options.ltf_sto_shift ...
             );
 
-            % obj.data_handler = DATA_Handler( ...
-            %     N        = options.N, ...
-            %     L        = options.L, ...
-            %     Bw       = options.Bw, ...
-            %     Npil     = options.Npil, ...
-            %     Ndat     = options.Ndat, ...
-            %     Nsymb    = options.data_Nsymb, ...
-            %     Mod_pow  = options.Mod_pow, ...
-            %     Cod_rate = options.Cod_rate, ...
-            %     alpha    = options.alpha, ...
-            %     beta     = options.beta, ...
-            %     debug    = options.debug ...
-            % );
             
-            obj.data_handler = DATA_Handler_1( ...
+            obj.data_handler = DATA_Handler( ...
                 N        = options.N, ...
                 L        = options.L, ...
                 Bw       = options.Bw, ...
@@ -150,20 +137,6 @@ classdef OFDM_System < handle
                 DC_guard = options.DC_guard, ...
                 debug    = options.debug ...
             );
-
-            % obj.data_handler = DATA_Handler_1( ...
-            %     N        = options.N, ...
-            %     L        = options.L, ...
-            %     Bw       = options.Bw, ...
-            %     Npil     = options.Npil, ...
-            %     Ndat     = options.Ndat, ...
-            %     Nsymb    = options.data_Nsymb, ...
-            %     Mod_pow  = options.Mod_pow, ...
-            %     Cod_rate = options.Cod_rate, ...
-            %     alpha    = options.alpha, ...
-            %     beta     = options.beta, ...
-            %     debug    = options.debug ...
-            % );
             
             % Если нужно сохранить ВЕСЬ объект после инициализации:
             % save(fullfile(obj.OutputDir, 'system_obj.mat'), 'obj');
@@ -492,8 +465,8 @@ classdef OFDM_System < handle
             % DATA_Handler уже является частью obj, используем его
             
             % Заголовок таблицы
-            fprintf('| %4s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR', 'BER', 'RMSE', 'CFO', 'Status');
-            fprintf('|%s|\n', repmat('-', 1, 56));
+            fprintf('| %4s | %8s | %8s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR', 'BER(ID)','BER', 'RMSE(ID)', 'RMSE', 'CFO', 'Status');
+            fprintf('|%s|\n', repmat('-', 1, 82));
 
             total_ber = 0;
             total_rmse = 0;
@@ -509,7 +482,7 @@ classdef OFDM_System < handle
                 
                 % Проверка наличия файлов
                 if ~exist(rxFile, 'file') || ~exist(txFile, 'file')
-                    fprintf('| %4d | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', 'NO FILE');
+                    fprintf('| %4d | %8s | %8s  | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', 'NO FILE');
                     continue;
                 end
                 
@@ -526,7 +499,7 @@ classdef OFDM_System < handle
                 detect = stf_h.detect(rx_waveform);
                 
                 if ~detect
-                    fprintf('| %4d | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', 'FAIL:STF');
+                    fprintf('| %4d | %8s | %8s  | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', 'FAIL:STF');
                     continue;
                 end
                 
@@ -545,7 +518,7 @@ classdef OFDM_System < handle
                 est = ltf_h.estimate(rx_frame);
                 
                 if ~est
-                     fprintf('| %4d | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
+                     fprintf('| %4d | %8s | %8s | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
                      continue;
                 end
                 
@@ -563,57 +536,65 @@ classdef OFDM_System < handle
                     % rx_data_wav = rx_frame(data_start_idx : data_start_idx + len_data_samples - 1);
                 % end
                 
-                % Передача эквалайзера и данных в handler
-                ltf_eqv = obj.data_handler.set_eqv(ltf_h);
+                % % Передача эквалайзера и данных в handler
+                % ltf_eqv = obj.data_handler.set_eqv(ltf_h);
                 
                 % Для корректного расчета RMSE внутри handler (опционально)
                 obj.data_handler.mod_data = tx_struct.tx_mod_symbols;
                 obj.data_handler.data     = tx_struct.source_bits;
                 
+                ltf_eqv = obj.data_handler.set_eqv(ltf_h);
+                [ideal_ifft_data, ideal_rx_res_data, ideal_rx_eqv_data, ideal_rx_eqv_pilots] = obj.data_handler.ideal_get_data(rx_data_wav, tx_struct.source_bits);
+
+                ltf_eqv = obj.data_handler.set_eqv(ltf_h);
                 [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav);
-                % [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data_with_ideal(rx_data_wav, tx_struct.source_bits);
                 % --- СТАТИСТИКА ---
                 
                 % BER
-                L_bits = min(length(rx_res_data), length(tx_struct.source_bits));
-                error = xor(rx_res_data(1:L_bits), tx_struct.source_bits(1:L_bits));
-                error = reshape(error, obj.data_handler.Mod_pow, []);
-                error = mean(error, 1);
-                error = reshape(error, obj.data_handler.Ndat, []);
-                error = error.';
-                ber = mean(error);
+                ber = mean(xor(rx_res_data(:), tx_struct.source_bits(:)));
+                ideal_ber = mean(xor(ideal_rx_res_data(:), tx_struct.source_bits(:)));
 
-                % figure(3);
-                % plot(ber);
+                Fig = figure(1);
+                clf;
+                t = tiledlayout(Fig, 4, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
                 
-                % figure(6)
-                % plot(obj.data_handler.ang);
+                nexttile([1,2]);
+                spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
+                max_val = max(10*log10(abs(rx_waveform).^2)); % Аналог db()
+                clim([max_val-50, max_val]);
+                title(sprintf('Frame %d Spectrogram', folderIdx));
 
-                figure(1);
-                subplot(2,2,1);
+                nexttile;
+                plot(abs(rx_waveform));
+                title("Signal amplitude");
+
+                nexttile;
+                plot(obj.data_handler.ang);
+                title("Pilot phase diviation");
+
+                nexttile;
                 plot(abs(ltf_eqv));
-                title("LTF Chan prob");
-                subplot(2,2,3);
+                title("LTF AFC");
+                nexttile;
                 plot(unwrap(angle(ltf_eqv)));
+                title("LTF PFC");
 
-                subplot(2,2,2);
+                nexttile;
                 plot(abs(obj.data_handler.eqv));
-                title("Last symb Chan prob");
-                subplot(2,2,4);
+                title("Last symb AFC");
+                nexttile;
                 plot(unwrap(angle(obj.data_handler.eqv)));
-
-
-                ber = mean(ber);
-                
+                title("Last symb PFC");
+                         
                 % RMSE
-                L_syms = min(length(rx_eqv_data), length(tx_struct.tx_mod_symbols));
-                rmse = sqrt(mean(abs(rx_eqv_data(1:L_syms) - tx_struct.tx_mod_symbols(1:L_syms)).^2));
+                rmse = sqrt(mean(abs(rx_eqv_data(:) - tx_struct.tx_mod_symbols(:)).^2));
+                ideal_rmse = sqrt(mean(abs(ideal_rx_eqv_data(:) - tx_struct.tx_mod_symbols(:)).^2));
                 
                 % Вывод
                  % 1. Вывод в консоль
-                fprintf('| %4d | %8.5f | %8.5f | %8.4f | %8.2e | %s |\n', ...
-                    folderIdx, stf_h.snr, ber, rmse, stf_h.cfo, 'OK');
+                fprintf('| %4d | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.2e | %6s |\n', ...
+                    folderIdx, stf_h.snr, ideal_ber, ber, ideal_rmse, rmse, stf_h.cfo, 'OK');
                 
                 total_ber = total_ber + ber;
                 total_rmse = total_rmse + rmse;
@@ -645,16 +626,6 @@ classdef OFDM_System < handle
                 
                 t = tiledlayout(hFig, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
                 
-                % Левая панель: Спектрограмма
-                nexttile;
-                % Используем N из конфига класса
-                spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
-                max_val = max(10*log10(abs(rx_waveform).^2)); % Аналог db()
-                clim([max_val-50, max_val]);
-                title(sprintf('Frame %d Spectrogram', folderIdx));
-                
-                % Правая панель: Созвездие
-                % Нормировка ifft_data для отображения (как в вашем примере)
                 ifft_data_plot = ifft_data ./ sqrt(mean(abs(ifft_data.^2), 'all'));
                 
                 nexttile;
@@ -669,34 +640,62 @@ classdef OFDM_System < handle
                 axis("square");
                 grid on;
                 title(sprintf('Constellation (BER: %.1e)', ber));
+
+                ideal_ifft_data_plot = ideal_ifft_data ./ sqrt(mean(abs(ideal_ifft_data.^2), 'all'));
+
+                nexttile;
+                scatter(real(ideal_ifft_data_plot(:)), imag(ideal_ifft_data_plot(:)), 3, 'blue', '.');
+                hold on;
+                scatter(real(ideal_rx_eqv_data(:)), imag(ideal_rx_eqv_data(:)), 3, 'red', '.');
+                scatter(real(ideal_rx_eqv_pilots(:)), imag(ideal_rx_eqv_pilots(:)), 7, 'green', '.');
+                hold off;
+                
+                xlim([-2, 2]);
+                ylim([-2, 2]);
+                axis("square");
+                grid on;
+                title(sprintf('Constellation (Ideal)'));
                 
                 % Сохранение графика в папку пакета
                 plotPath = fullfile(currentDir, 'analysis_plot.png');
                 exportgraphics(hFig, plotPath, 'Resolution', 300);
 
                 eFig = figure(3);
+                t = tiledlayout(eFig, 2, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
                 clf(eFig);
 
-                error = abs(rx_eqv_data - tx_struct.tx_mod_symbols);
-
-                mesh(error);
-                title(sprintf('Frame %d RMSE', folderIdx));
-                colormap('jet');    
-                axis xy;            
-                xlabel('Time / Index');
-                ylabel('Frequency / Range');
-                zlim([0,1]);
-                clim([0, 1]);
-
-                figure(4)
-                plot(obj.data_handler.ang);
-
+                ax1 = nexttile;
+                error1 = abs(rx_eqv_data - tx_struct.tx_mod_symbols);
+                mesh(ax1, error1);
+                title(ax1, sprintf('Frame %d RMSE', folderIdx));
+                colormap(ax1, 'jet');    
+                axis(ax1, 'xy');            
+                xlabel(ax1, 'Time / Index');
+                ylabel(ax1, 'Frequency / Range');
+                zlim(ax1, [0, 1]);
+                clim(ax1, [0, 1]);
                 
+                ax2 = nexttile;
+                error2 = abs(ideal_rx_eqv_data - tx_struct.tx_mod_symbols);
+                mesh(ax2, error2);
+                title(ax2, sprintf('Frame %d RMSE (Ideal)', folderIdx));
+                colormap(ax2, 'jet');    
+                axis(ax2, 'xy');            
+                xlabel(ax2, 'Time / Index');
+                ylabel(ax2, 'Frequency / Range');
+                zlim(ax2, [0, 1]);
+                clim(ax2, [0, 1]);
+                
+                hLink1 = linkprop([ax1, ax2], {'CameraPosition', 'CameraUpVector', 'CameraViewAngle'});
+                hLink2 = linkprop([ax1, ax2], {'XLim', 'YLim', 'ZLim'});
+                
+                setappdata(eFig, 'graphics_linkprop1', hLink1);
+                setappdata(eFig, 'graphics_linkprop2', hLink2);
 
             end
             
             if valid_count > 0
-                fprintf('|%s|\n', repmat('-', 1, 56));
+                fprintf('|%s|\n', repmat('-', 1, 82));
                 fprintf('Avg BER: %e | Avg RMSE: %f\n', total_ber/valid_count, total_rmse/valid_count);
             end
         end
