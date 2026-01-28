@@ -13,6 +13,8 @@ classdef OFDM_System < handle
         Config
         sdr_order
         OutputDir % Путь к папке результатов
+        
+        crcCfg
     end
 
     methods
@@ -62,6 +64,9 @@ classdef OFDM_System < handle
                 options.sdr_order (1,1) int32 = 1
             end
 
+            poly = 'z^32 + z^26 + z^23 + z^22 + z^16 + z^12 + z^11 + z^10 + z^8 + z^7 + z^5 + z^4 + z^2 + z + 1';
+            obj.crcCfg = crcConfig(Polynomial=poly,ChecksumsPerFrame=1);
+
             obj.Fc = options.Fc;
             obj.Fs = options.Fs;
             obj.sdr_order = options.sdr_order;
@@ -87,12 +92,6 @@ classdef OFDM_System < handle
             configPath = fullfile(obj.OutputDir, 'config.mat');
             save(configPath, 'options');
             
-            % Опционально: можно сохранить в JSON для читаемости человеком
-            % jsonText = jsonencode(options, 'PrettyPrint', true);
-            % fid = fopen(fullfile(obj.OutputDir, 'config.json'), 'w');
-            % fprintf(fid, '%s', jsonText);
-            % fclose(fid);
-
 
             % 4. Инициализация подсистем
             obj.chan = Channel( ...
@@ -121,21 +120,8 @@ classdef OFDM_System < handle
                 sto_shift=options.ltf_sto_shift ...
             );
 
-            % obj.data_handler = DATA_Handler( ...
-            %     N        = options.N, ...
-            %     L        = options.L, ...
-            %     Bw       = options.Bw, ...
-            %     Npil     = options.Npil, ...
-            %     Ndat     = options.Ndat, ...
-            %     Nsymb    = options.data_Nsymb, ...
-            %     Mod_pow  = options.Mod_pow, ...
-            %     Cod_rate = options.Cod_rate, ...
-            %     alpha    = options.alpha, ...
-            %     beta     = options.beta, ...
-            %     debug    = options.debug ...
-            % );
             
-            obj.data_handler = DATA_Handler_1( ...
+            obj.data_handler = DATA_Handler( ...
                 N        = options.N, ...
                 L        = options.L, ...
                 Bw       = options.Bw, ...
@@ -150,20 +136,6 @@ classdef OFDM_System < handle
                 DC_guard = options.DC_guard, ...
                 debug    = options.debug ...
             );
-
-            % obj.data_handler = DATA_Handler_1( ...
-            %     N        = options.N, ...
-            %     L        = options.L, ...
-            %     Bw       = options.Bw, ...
-            %     Npil     = options.Npil, ...
-            %     Ndat     = options.Ndat, ...
-            %     Nsymb    = options.data_Nsymb, ...
-            %     Mod_pow  = options.Mod_pow, ...
-            %     Cod_rate = options.Cod_rate, ...
-            %     alpha    = options.alpha, ...
-            %     beta     = options.beta, ...
-            %     debug    = options.debug ...
-            % );
             
             % Если нужно сохранить ВЕСЬ объект после инициализации:
             % save(fullfile(obj.OutputDir, 'system_obj.mat'), 'obj');
@@ -180,8 +152,10 @@ classdef OFDM_System < handle
                 rng(seed);
             end
 
-            num_bits = obj.data_handler.payload;
+            num_bits = obj.data_handler.payload-32*obj.data_handler.Nsymb;
             source_bits = randi([0, 1], num_bits, 1);
+            source_bits = reshape(source_bits, [], obj.data_handler.Nsymb, []);
+            for i = 1:obj.data_handler.Nsymb
             
             % Генерируем waveform (внутри data_handler обновляется поле mod_data)
             data_wav = obj.data_handler.get_waveform(source_bits);
@@ -571,10 +545,10 @@ classdef OFDM_System < handle
                 obj.data_handler.data     = tx_struct.source_bits;
                 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav);
+                [ideal_ifft_data, ideal_rx_res_data, ideal_rx_eqv_data, ideal_rx_eqv_pilots] = obj.data_handler.ideal_get_data(rx_data_wav, tx_struct.source_bits);
 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [ideal_ifft_data, ideal_rx_res_data, ideal_rx_eqv_data, ideal_rx_eqv_pilots] = obj.data_handler.ideal_get_data(rx_data_wav, tx_struct.source_bits);
+                [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav);
                 % --- СТАТИСТИКА ---
                 
                 % BER
@@ -585,25 +559,34 @@ classdef OFDM_System < handle
                 clf;
                 t = tiledlayout(Fig, 4, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
+                
                 nexttile([1,2]);
                 spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
                 max_val = max(10*log10(abs(rx_waveform).^2)); % Аналог db()
                 clim([max_val-50, max_val]);
                 title(sprintf('Frame %d Spectrogram', folderIdx));
-                % plot(obj.data_handler.ang);
-                % title("Pilot(eqv) phase diviation");
+
+                nexttile;
+                plot(abs(rx_waveform));
+                title("Signal amplitude");
+
+                nexttile;
+                plot(obj.data_handler.ang);
+                title("Pilot phase diviation");
 
                 nexttile;
                 plot(abs(ltf_eqv));
-                title("LTF Chan prob");
+                title("LTF AFC");
                 nexttile;
                 plot(unwrap(angle(ltf_eqv)));
+                title("LTF PFC");
 
                 nexttile;
                 plot(abs(obj.data_handler.eqv));
-                title("Last symb Chan prob");
+                title("Last symb AFC");
                 nexttile;
                 plot(unwrap(angle(obj.data_handler.eqv)));
+                title("Last symb PFC");
                          
                 % RMSE
                 rmse = sqrt(mean(abs(rx_eqv_data(:) - tx_struct.tx_mod_symbols(:)).^2));
@@ -642,15 +625,7 @@ classdef OFDM_System < handle
                 % set(hFig, 'Visible', 'off'); % Раскомментируйте, чтобы окна не мелькали
                 clf(hFig);
                 
-                t = tiledlayout(hFig, 2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-                
-                % Левая панель: Спектрограмма
-                nexttile([1,2]);
-                spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
-                max_val = max(10*log10(abs(rx_waveform).^2)); % Аналог db()
-                clim([max_val-50, max_val]);
-                title(sprintf('Frame %d Spectrogram', folderIdx));
-                
+                t = tiledlayout(hFig, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
                 
                 ifft_data_plot = ifft_data ./ sqrt(mean(abs(ifft_data.^2), 'all'));
                 

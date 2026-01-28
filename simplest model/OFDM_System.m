@@ -13,6 +13,7 @@ classdef OFDM_System < handle
         Config
         sdr_order
         OutputDir % Путь к папке результатов
+        
     end
 
     methods
@@ -87,12 +88,6 @@ classdef OFDM_System < handle
             configPath = fullfile(obj.OutputDir, 'config.mat');
             save(configPath, 'options');
             
-            % Опционально: можно сохранить в JSON для читаемости человеком
-            % jsonText = jsonencode(options, 'PrettyPrint', true);
-            % fid = fopen(fullfile(obj.OutputDir, 'config.json'), 'w');
-            % fprintf(fid, '%s', jsonText);
-            % fclose(fid);
-
 
             % 4. Инициализация подсистем
             obj.chan = Channel( ...
@@ -154,7 +149,14 @@ classdef OFDM_System < handle
             end
 
             num_bits = obj.data_handler.payload;
-            source_bits = randi([0, 1], num_bits, 1);
+
+            BPS = num_bits/obj.data_handler.Nsymb;
+            source_data = randi([0, 1], BPS-32, obj.data_handler.Nsymb);
+            source_bits = zeros(BPS, obj.data_handler.Nsymb);
+            for i = 1:obj.data_handler.Nsymb
+                source_bits(:,i) = crcGenerate(source_data(:,i), obj.data_handler.crcCfg);
+            end
+            source_bits = source_bits(:);
             
             % Генерируем waveform (внутри data_handler обновляется поле mod_data)
             data_wav = obj.data_handler.get_waveform(source_bits);
@@ -544,8 +546,8 @@ classdef OFDM_System < handle
                 obj.data_handler.data     = tx_struct.source_bits;
                 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [ideal_ifft_data, ideal_rx_res_data, ideal_rx_eqv_data, ideal_rx_eqv_pilots] = obj.data_handler.ideal_get_data(rx_data_wav, tx_struct.source_bits);
-
+                % [ideal_ifft_data, ideal_rx_res_data, ideal_rx_eqv_data, ideal_rx_eqv_pilots] = obj.data_handler.ideal_get_data(rx_data_wav, tx_struct.source_bits);
+                [ideal_ifft_data, ideal_rx_res_data, ideal_rx_eqv_data, ideal_rx_eqv_pilots] = obj.data_handler.crc_get_data(rx_data_wav);
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
                 [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav);
                 % --- СТАТИСТИКА ---

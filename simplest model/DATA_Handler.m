@@ -36,6 +36,8 @@ classdef DATA_Handler < handle
         alpha
         beta
 
+        crcCfg
+
     end
 
     methods
@@ -73,12 +75,10 @@ classdef DATA_Handler < handle
             );
 
             obj.Ndat = obj.ofdm.Ndat;
-            
-
             obj.Mod_pow = options.Mod_pow;
             obj.Cod_rate = options.Cod_rate;
 
-            obj.payload = floor(obj.Nsymb*obj.Ndat*obj.Cod_rate*obj.Mod_pow*obj.Cod_rate);
+            obj.payload = floor(obj.Nsymb*obj.Ndat*obj.Cod_rate*obj.Mod_pow);
 
             obj.data = [];
             obj.mod_data = [];
@@ -95,13 +95,16 @@ classdef DATA_Handler < handle
             obj.alpha = options.alpha;
             obj.beta = options.beta;
 
+            poly = 'z^32 + z^26 + z^23 + z^22 + z^16 + z^12 + z^11 + z^10 + z^8 + z^7 + z^5 + z^4 + z^2 + z + 1';
+            obj.crcCfg = crcConfig(Polynomial=poly,ChecksumsPerFrame=1);
+
         end
 
         function waveform = get_waveform(obj, data)
             obj.data = reshape(data, [], 1);
 
             obj.Nsymb = int32(length(data)/(obj.Ndat*obj.Mod_pow*obj.Cod_rate));
-            obj.payload = floor(obj.Nsymb*obj.Ndat*obj.Cod_rate*obj.Mod_pow*obj.Cod_rate);
+            obj.payload = floor(obj.Nsymb*obj.Ndat*obj.Cod_rate*obj.Mod_pow);
 
             pilots = pskmod(zeros(obj.Npil, obj.Nsymb), 2);
             obj.mod_data = qammod(obj.data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
@@ -141,11 +144,16 @@ classdef DATA_Handler < handle
             end
 
             pilots = unwrap(angle(pilots.'));
+
+            figure(4);
+            clf;
+            plot(pilots(:,obj.Npil)-pilots(:,1));
+
             pilots = mean(pilots, 2);
             obj.ang(:,1) = pilots;
 
             x = double(1:obj.Nsymb);
-            p = polyfit(x.', pilots, 1);
+            p = polyfit(x, pilots, 1);
             dp = p(1)/(obj.L+obj.N);
             phase = 0;
             for i = 1:length(waveform)
@@ -154,16 +162,17 @@ classdef DATA_Handler < handle
             end
             
             iter = 0;
+            
             for i = 1:obj.Nsymb
                 [ifft_data(:, i), ~, ~] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
-                iter = iter+(obj.N+obj.L);
+                iter = iter+obj.N+obj.L;
 
                 rx_eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
                 
                 pilot_eqv = rx_eqv_data(obj.eqv_pilotIdx, i);
                 pilot_eqv = interp1(obj.eqv_pilotIdx, pilot_eqv, indices, 'linear', 'extrap');
                 pilot_eqv = (1-obj.alpha)*ones(size(pilot_eqv))+obj.alpha*pilot_eqv;
-                pilot_eqv = 1.0./(pilot_eqv+1e-6*exp(1i*pi*angle(pilot_eqv)));
+                pilot_eqv = conj(pilot_eqv)./(abs(pilot_eqv.^2)+1e-6);
                 
                 rx_eqv_data(:, i) = rx_eqv_data(:, i).*pilot_eqv;
                 rx_eqv_pilots = rx_eqv_data(obj.eqv_pilotIdx, i);
@@ -208,11 +217,12 @@ classdef DATA_Handler < handle
             end
 
             pilots = unwrap(angle(pilots.'));
+
             pilots = mean(pilots, 2);
             obj.ang(:,1) = pilots;
 
             x = double(1:obj.Nsymb);
-            p = polyfit(x.', pilots, 1);
+            p = polyfit(x, pilots, 1);
             dp = p(1)/(obj.L+obj.N);
             phase = 0;
             for i = 1:length(waveform)
@@ -221,6 +231,8 @@ classdef DATA_Handler < handle
             end
             
             iter = 0;
+
+            
             for i = 1:obj.Nsymb
                 [ifft_data(:, i), ~, ~] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
                 iter = iter+(obj.N+obj.L);
@@ -248,6 +260,90 @@ classdef DATA_Handler < handle
 
                 val = polyfit(obj.eqv_pilotIdx, angle(conj(obj.eqv(obj.eqv_pilotIdx))), 1);
                 obj.ang(i,1) = val(2);
+            end
+
+            rx_eqv_pilots   = rx_eqv_data(obj.eqv_pilotIdx, :);
+            rx_eqv_data     = rx_eqv_data(obj.dataIdx, :);
+            
+            rx_res_data     = qamdemod(rx_eqv_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
+            rx_res_data     = reshape(rx_res_data, [], 1);
+
+        end
+        
+        function [mod_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = crc_get_data(obj, waveform)
+            mod_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
+            ifft_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
+            pilots = complex(zeros(obj.Npil, obj.Nsymb));
+            rx_eqv_data = zeros(size(ifft_data));
+            indices = (1:obj.ofdm.bandsize).';
+
+           iter = 0;
+            for i = 1:obj.Nsymb
+                [mod_data(:, i), ~, pilots(:, i)] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
+                iter = iter+(obj.N+obj.L);
+            end
+
+            pilots = unwrap(angle(pilots.'));
+
+            x = double(1:obj.Nsymb);
+            % sfo = polyfit(x,pilots(:,obj.Npil)-pilots(:,1),1);
+            % sfo = sfo(1);
+            sfo = median(diff(pilots(:,obj.Npil)-pilots(:,1)));
+            sfo = sfo/(obj.ofdm.pilots(obj.Npil)-obj.ofdm.pilots(1));
+            % disp(sfo*5e6/2/pi);
+
+            pilots = mean(pilots, 2);
+            obj.ang(:,1) = pilots;
+
+            x = double(1:obj.Nsymb);
+            p = polyfit(x, pilots, 1);
+            dp = p(1)/(obj.L+obj.N);
+            phase = 0;
+            for i = 1:length(waveform)
+                phase = phase + dp;
+                waveform(i) = waveform(i)*exp(-1i*phase);
+            end
+            
+            iter = 0;
+            t = 1:length(obj.eqv);
+            t = t.';
+            t = t-length(obj.eqv)/2;
+            
+            for i = 1:obj.Nsymb
+                [ifft_data(:, i), ~, ~] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
+                iter = iter+(obj.N+obj.L);
+                
+                rx_eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
+                
+                pilot_eqv = rx_eqv_data(obj.eqv_pilotIdx, i);
+                pilot_eqv = interp1(obj.eqv_pilotIdx, pilot_eqv, indices, 'linear', 'extrap');
+                pilot_eqv = (1-obj.alpha)*ones(size(pilot_eqv))+obj.alpha*pilot_eqv;
+                pilot_eqv = 1.0./(pilot_eqv+1e-6*exp(1i*pi*angle(pilot_eqv)));
+                
+                rx_eqv_data(:, i) = rx_eqv_data(:, i).*pilot_eqv;
+                rx_eqv_pilots = rx_eqv_data(obj.eqv_pilotIdx, i);
+                rx_eqv_data(:, i) = rx_eqv_data(:, i)./sqrt(mean(abs(rx_eqv_pilots.^2)));
+                
+                rx_res_data = rx_eqv_data(obj.dataIdx, i);
+                rx_res_bin_data = qamdemod(rx_res_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
+                rx_res_bin_data = reshape(rx_res_bin_data, [], 1);
+
+                [~,err] = crcDetect(rx_res_bin_data,obj.crcCfg);
+                
+                if ~err
+                    pilots = pskmod(zeros(obj.Npil, 1), 2);
+                    rx_mod_res_data = qammod(rx_res_bin_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
+                    
+                    [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
+    
+                    new_H = ifft_data(:, i)./rx_demod_res_data;
+                    
+                    new_eqv = conj(new_H)./(abs(new_H.^2)+1e-6);
+                    obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
+                else
+                    obj.eqv = obj.eqv.*exp(-1i*sfo*t);
+                end
+
             end
 
             rx_eqv_pilots   = rx_eqv_data(obj.eqv_pilotIdx, :);
