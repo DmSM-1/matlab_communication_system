@@ -92,7 +92,8 @@ classdef LTF_Handler < handle
                 plot(val);
             end
                       
-            obj.eqv = 1.0./(obj.H+1e-6*exp(1i*pi*angle(obj.H)));
+            obj.eqv = conj(obj.H)./(abs(obj.H.^2)+1e-3);
+            % obj.eqv = 1.0./(obj.H+1e-6*exp(1i*pi*angle(obj.H)));
 
             est = true;
         end

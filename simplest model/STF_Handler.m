@@ -18,6 +18,7 @@ classdef STF_Handler < handle
         detected
         buf
         debug
+        norm_snr
         snr
     end
 
@@ -36,6 +37,7 @@ classdef STF_Handler < handle
             obj.detected = 0;
             obj.buf = [];
             obj.snr = 0;
+            obj.norm_snr = 0;
             obj.debug = options.debug;
         end
 
@@ -62,7 +64,7 @@ classdef STF_Handler < handle
                 noise_power = noise_power/(obj.stf.N-det_mask_weight);
 
                 SNR = 10*log10(pilot_power/noise_power);
-                obj.snr = SNR;
+                obj.norm_snr = SNR;
                 
                 if obj.debug 
                     fprintf("Symb:%4d Stage %d SNR(dB) %3.3f \n", i, obj.stage, SNR); 
@@ -99,20 +101,37 @@ classdef STF_Handler < handle
                             fprintf("Start CFO est\n");
                         end
 
-                        obj.buf = obj.buf(1:end-mod(length(obj.buf), obj.stf.period));
-                        obj.buf = reshape(obj.buf, obj.stf.period, []);
+                        cfo_buf = obj.buf(1:end-mod(length(obj.buf), obj.stf.period));
+                        cfo_buf = reshape(cfo_buf, obj.stf.period, []);
                         
-                        obj.buf = fft(obj.buf);
+                        cfo_buf = fft(cfo_buf);
     
                         Ppos = int32(double(obj.stf.Ppos-1).*double(obj.stf.period)./double(obj.stf.N))+1;
                         
-                        pilots = obj.buf(Ppos, :);
+                        pilots = cfo_buf(Ppos, :);
                         pilot_phases = unwrap(angle(pilots), [], 2);
 
-                        x = repmat([1:length(pilot_phases)], length(Ppos), 1);
+                        x = repmat(1:length(pilot_phases), length(Ppos), 1);
                         
                         obj.cfo = polyfit(x, pilot_phases, 1);
                         obj.cfo = obj.cfo(1)/2/pi/double(obj.stf.period);
+                        
+                        phase = 0;
+                        obj.buf = obj.buf(1:end-mod(length(obj.buf), obj.stf.N));
+                        for k = 1:length(obj.buf)
+                            obj.buf(k) = obj.buf(k)*exp(-2i*pi*phase);
+                            phase = phase + obj.cfo;
+                        end
+
+                        obj.buf = reshape(obj.buf, obj.stf.N, []);
+                        obj.buf = fft(obj.buf);
+                        obj.buf = abs(obj.buf).^2;
+
+                        pilot_power = sum(sum(obj.buf(obj.stf.Ppos, :)));
+                        noise_power = sum(sum(obj.buf))-pilot_power;
+
+                        obj.snr = 10*log10(pilot_power/noise_power);
+                        
                         
                         if obj.debug
                             fprintf("Pilot position: %d\n", Ppos);

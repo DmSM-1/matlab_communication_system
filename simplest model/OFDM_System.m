@@ -8,6 +8,7 @@ classdef OFDM_System < handle
         data_handler
         Fc
         Fs
+        crc
         
         % Конфигурация и пути
         Config
@@ -38,7 +39,7 @@ classdef OFDM_System < handle
                 % --- STF Parameters ---
                 options.stf_Ppos = [] 
                 options.stf_margin1 (1,1) double = 1
-                options.stf_est_symb (1,1) double = 4
+                options.stf_est_symb (1,1) double = 8
                 options.stf_margin2 (1,1) double = 1
                 options.stf_mask_width (1,1) double = 30
                 options.stf_threshold (1,1) double = 7.0
@@ -61,11 +62,13 @@ classdef OFDM_System < handle
                 options.DC_guard (1,1) int32 = 1
 
                 options.sdr_order (1,1) int32 = 1
+                options.check_crc (1,1) logical = false
             end
 
             obj.Fc = options.Fc;
             obj.Fs = options.Fs;
             obj.sdr_order = options.sdr_order;
+            obj.crc = options.check_crc;
             
             % 1. Управление директорией (Overwrite / Create)
             obj.OutputDir = options.OutputDir;
@@ -137,7 +140,7 @@ classdef OFDM_System < handle
             % save(fullfile(obj.OutputDir, 'system_obj.mat'), 'obj');
         end
 
-        function [tx_waveform, source_bits] = generate_frame(obj, seed)
+        function [tx_waveform, coded_bits] = generate_frame(obj, seed)
             arguments
                 obj
                 seed = [] 
@@ -148,18 +151,11 @@ classdef OFDM_System < handle
                 rng(seed);
             end
 
-            num_bits = obj.data_handler.payload;
-
-            BPS = num_bits/obj.data_handler.Nsymb;
-            source_data = randi([0, 1], BPS-32, obj.data_handler.Nsymb);
-            source_bits = zeros(BPS, obj.data_handler.Nsymb);
-            for i = 1:obj.data_handler.Nsymb
-                source_bits(:,i) = crcGenerate(source_data(:,i), obj.data_handler.crcCfg);
-            end
-            source_bits = source_bits(:);
+            source_bits = randi([0, 1], obj.data_handler.payload, 1);
+            coded_bits = obj.data_handler.generate_data(source_data=source_bits);
             
             % Генерируем waveform (внутри data_handler обновляется поле mod_data)
-            data_wav = obj.data_handler.get_waveform(source_bits);
+            data_wav = obj.data_handler.get_waveform(coded_bits);
             
             % ИЗВЛЕКАЕМ МОДУЛИРОВАННЫЕ СИМВОЛЫ (QAM)
             % Это нужно для расчета EVM/RMSE без повторной модуляции
@@ -199,7 +195,7 @@ classdef OFDM_System < handle
             savePath = fullfile(currentSaveDir, 'tx_data.mat');
             
             % СОХРАНЯЕМ 3 ПЕРЕМЕННЫЕ: волну, биты и QAM-символы
-            save(savePath, 'tx_waveform', 'source_bits', 'tx_mod_symbols');
+            save(savePath, 'tx_waveform', 'coded_bits', 'tx_mod_symbols');
         end
         
         function run_channel_on_dataset(obj)
@@ -412,6 +408,7 @@ classdef OFDM_System < handle
 
             fprintf('--- Start Data Generation ---\n');
             fprintf('Target Directory: %s\n', obj.OutputDir);
+            fprintf('Payload: %d\n', obj.data_handler.payload);
             
             reverseStr = ''; 
             t_start = tic;
@@ -467,8 +464,8 @@ classdef OFDM_System < handle
             % DATA_Handler уже является частью obj, используем его
             
             % Заголовок таблицы
-            fprintf('| %4s | %8s | %8s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR', 'BER(ID)','BER', 'RMSE(ID)', 'RMSE', 'CFO', 'Status');
-            fprintf('|%s|\n', repmat('-', 1, 82));
+            fprintf('| %4s | %15s | %8s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR (BB SNR)', 'BER(ID)','BER', 'RMSE(ID)', 'RMSE', 'CFO', 'Status');
+            fprintf('|%s|\n', repmat('-', 1, 89));
 
             total_ber = 0;
             total_rmse = 0;
@@ -484,13 +481,13 @@ classdef OFDM_System < handle
                 
                 % Проверка наличия файлов
                 if ~exist(rxFile, 'file') || ~exist(txFile, 'file')
-                    fprintf('| %4d | %8s | %8s  | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', 'NO FILE');
+                    fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', 'NO FILE');
                     continue;
                 end
                 
                 % Загрузка данных
                 rx_struct = load(rxFile, 'rx_waveform');
-                tx_struct = load(txFile, 'tx_waveform', 'source_bits', 'tx_mod_symbols');
+                tx_struct = load(txFile, 'tx_waveform', 'coded_bits', 'tx_mod_symbols');
                 
                 rx_waveform = rx_struct.rx_waveform;
                 
@@ -501,7 +498,7 @@ classdef OFDM_System < handle
                 detect = stf_h.detect(rx_waveform);
                 
                 if ~detect
-                    fprintf('| %4d | %8s | %8s  | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', 'FAIL:STF');
+                    fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', 'FAIL:STF');
                     continue;
                 end
                 
@@ -520,7 +517,7 @@ classdef OFDM_System < handle
                 est = ltf_h.estimate(rx_frame);
                 
                 if ~est
-                     fprintf('| %4d | %8s | %8s | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
+                     fprintf('| %4d | %15s | %8s | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
                      continue;
                 end
                 
@@ -534,6 +531,7 @@ classdef OFDM_System < handle
                 % Защита от выхода за границы массива
                 % if data_start_idx + len_data_samples - 1 > length(rx_frame)
                 rx_data_wav = rx_frame(data_start_idx : end);
+                
                 % else
                     % rx_data_wav = rx_frame(data_start_idx : data_start_idx + len_data_samples - 1);
                 % end
@@ -543,29 +541,21 @@ classdef OFDM_System < handle
                 
                 % Для корректного расчета RMSE внутри handler (опционально)
                 obj.data_handler.mod_data = tx_struct.tx_mod_symbols;
-                obj.data_handler.data     = tx_struct.source_bits;
+                obj.data_handler.data     = tx_struct.coded_bits;
                 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                % [ideal_ifft_data, ideal_rx_res_data, ideal_rx_eqv_data, ideal_rx_eqv_pilots] = obj.data_handler.ideal_get_data(rx_data_wav, tx_struct.source_bits);
-                [ideal_ifft_data, ideal_rx_res_data, ideal_rx_eqv_data, ideal_rx_eqv_pilots] = obj.data_handler.crc_get_data(rx_data_wav);
+                [id_ifft_data, id_rx_res_data, id_rx_eqv_data, id_rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav);
+                [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc);
                 % --- СТАТИСТИКА ---
                 
                 % BER
-                ber = mean(xor(rx_res_data(:), tx_struct.source_bits(:)));
-                ideal_ber = mean(xor(ideal_rx_res_data(:), tx_struct.source_bits(:)));
+                ber = mean(xor(rx_res_data(:), tx_struct.coded_bits(:)));
+                id_ber = mean(xor(id_rx_res_data(:), tx_struct.coded_bits(:)));
 
                 Fig = figure(1);
                 clf;
-                t = tiledlayout(Fig, 4, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-
-                
-                nexttile([1,2]);
-                spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
-                max_val = max(10*log10(abs(rx_waveform).^2)); % Аналог db()
-                clim([max_val-50, max_val]);
-                title(sprintf('Frame %d Spectrogram', folderIdx));
+                t = tiledlayout(Fig, 3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
                 nexttile;
                 plot(abs(rx_waveform));
@@ -588,15 +578,24 @@ classdef OFDM_System < handle
                 nexttile;
                 plot(unwrap(angle(obj.data_handler.eqv)));
                 title("Last symb PFC");
+
+                figure(2);
+                clf;
+                spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
+                max_val = max(10*log10(abs(rx_waveform).^2)); % Аналог db()
+                clim([max_val-50, max_val]);
+                title(sprintf('Frame %d Spectrogram', folderIdx));
                          
                 % RMSE
                 rmse = sqrt(mean(abs(rx_eqv_data(:) - tx_struct.tx_mod_symbols(:)).^2));
-                ideal_rmse = sqrt(mean(abs(ideal_rx_eqv_data(:) - tx_struct.tx_mod_symbols(:)).^2));
+                id_rmse = sqrt(mean(abs(id_rx_eqv_data(:) - tx_struct.tx_mod_symbols(:)).^2));
                 
                 % Вывод
                  % 1. Вывод в консоль
-                fprintf('| %4d | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.2e | %6s |\n', ...
-                    folderIdx, stf_h.snr, ideal_ber, ber, ideal_rmse, rmse, stf_h.cfo, 'OK');
+                snr = stf_h.snr-10*log10((obj.data_handler.Ndat+obj.data_handler.Npil)/obj.data_handler.N);
+
+                fprintf('| %4d | %3.3f (%3.3f) | %8.5f | %8.5f | %8.4f | %8.4f | %8.2e | %6s |\n', ...
+                    folderIdx, stf_h.snr, snr, id_ber, ber, id_rmse, rmse, stf_h.cfo, 'OK');
                 
                 total_ber = total_ber + ber;
                 total_rmse = total_rmse + rmse;
@@ -617,12 +616,12 @@ classdef OFDM_System < handle
                         fprintf(fid, 'FolderID,SNR,BER,RMSE,CFO_Est\n');
                     end
                     % Пишем данные
-                    fprintf(fid, '%d,%.6f,%.6f,%.6f,%.6e\n', folderIdx, stf_h.snr, ber, rmse, stf_h.cfo);
+                    fprintf(fid, '%d,%.6f,%.6f,%.6f,%.6e\n', folderIdx, snr, ber, rmse, stf_h.cfo);
                     fclose(fid);
                 end
 
                 % 4. Построение и сохранение графика
-                hFig = figure(2);
+                hFig = figure(3);
                 % set(hFig, 'Visible', 'off'); % Раскомментируйте, чтобы окна не мелькали
                 clf(hFig);
                 
@@ -643,26 +642,26 @@ classdef OFDM_System < handle
                 grid on;
                 title(sprintf('Constellation (BER: %.1e)', ber));
 
-                ideal_ifft_data_plot = ideal_ifft_data ./ sqrt(mean(abs(ideal_ifft_data.^2), 'all'));
+                id_ifft_data_plot = id_ifft_data ./ sqrt(mean(abs(id_ifft_data.^2), 'all'));
 
                 nexttile;
-                scatter(real(ideal_ifft_data_plot(:)), imag(ideal_ifft_data_plot(:)), 3, 'blue', '.');
+                scatter(real(id_ifft_data_plot(:)), imag(id_ifft_data_plot(:)), 3, 'blue', '.');
                 hold on;
-                scatter(real(ideal_rx_eqv_data(:)), imag(ideal_rx_eqv_data(:)), 3, 'red', '.');
-                scatter(real(ideal_rx_eqv_pilots(:)), imag(ideal_rx_eqv_pilots(:)), 7, 'green', '.');
+                scatter(real(id_rx_eqv_data(:)), imag(id_rx_eqv_data(:)), 3, 'red', '.');
+                scatter(real(id_rx_eqv_pilots(:)), imag(id_rx_eqv_pilots(:)), 7, 'green', '.');
                 hold off;
                 
                 xlim([-2, 2]);
                 ylim([-2, 2]);
                 axis("square");
                 grid on;
-                title(sprintf('Constellation (Ideal)'));
+                title(sprintf('Constellation (id)'));
                 
                 % Сохранение графика в папку пакета
                 plotPath = fullfile(currentDir, 'analysis_plot.png');
                 exportgraphics(hFig, plotPath, 'Resolution', 300);
 
-                eFig = figure(3);
+                eFig = figure(4);
                 t = tiledlayout(eFig, 2, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
                 clf(eFig);
 
@@ -678,9 +677,9 @@ classdef OFDM_System < handle
                 clim(ax1, [0, 1]);
                 
                 ax2 = nexttile;
-                error2 = abs(ideal_rx_eqv_data - tx_struct.tx_mod_symbols);
+                error2 = abs(id_rx_eqv_data - tx_struct.tx_mod_symbols);
                 mesh(ax2, error2);
-                title(ax2, sprintf('Frame %d RMSE (Ideal)', folderIdx));
+                title(ax2, sprintf('Frame %d RMSE (id)', folderIdx));
                 colormap(ax2, 'jet');    
                 axis(ax2, 'xy');            
                 xlabel(ax2, 'Time / Index');
@@ -697,7 +696,7 @@ classdef OFDM_System < handle
             end
             
             if valid_count > 0
-                fprintf('|%s|\n', repmat('-', 1, 82));
+                fprintf('|%s|\n', repmat('-', 1, 89));
                 fprintf('Avg BER: %e | Avg RMSE: %f\n', total_ber/valid_count, total_rmse/valid_count);
             end
         end
