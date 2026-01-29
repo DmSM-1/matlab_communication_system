@@ -153,7 +153,7 @@ classdef OFDM_System < handle
 
             source_bits = randi([0, 1], obj.data_handler.payload, 1);
             coded_bits = obj.data_handler.generate_data(source_data=source_bits);
-            
+
             % Генерируем waveform (внутри data_handler обновляется поле mod_data)
             data_wav = obj.data_handler.get_waveform(coded_bits);
             
@@ -195,7 +195,7 @@ classdef OFDM_System < handle
             savePath = fullfile(currentSaveDir, 'tx_data.mat');
             
             % СОХРАНЯЕМ 3 ПЕРЕМЕННЫЕ: волну, биты и QAM-символы
-            save(savePath, 'tx_waveform', 'coded_bits', 'tx_mod_symbols');
+            save(savePath, 'tx_waveform', 'coded_bits', 'source_bits', 'tx_mod_symbols');
         end
         
         function run_channel_on_dataset(obj)
@@ -464,10 +464,11 @@ classdef OFDM_System < handle
             % DATA_Handler уже является частью obj, используем его
             
             % Заголовок таблицы
-            fprintf('| %4s | %15s | %8s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR (BB SNR)', 'BER(ID)','BER', 'RMSE(ID)', 'RMSE', 'CFO', 'Status');
-            fprintf('|%s|\n', repmat('-', 1, 89));
+            fprintf('| %4s | %15s | %8s | %8s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR (BB SNR)', 'BER(ID)','BER', 'BER(FEC)', 'RMSE(ID)', 'RMSE', 'CFO', 'Status');
+            fprintf('|%s|\n', repmat('-', 1, 100));
 
             total_ber = 0;
+            total_fec_ber = 0;
             total_rmse = 0;
             valid_count = 0;
 
@@ -481,13 +482,13 @@ classdef OFDM_System < handle
                 
                 % Проверка наличия файлов
                 if ~exist(rxFile, 'file') || ~exist(txFile, 'file')
-                    fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', 'NO FILE');
+                    fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', 'NO FILE');
                     continue;
                 end
                 
                 % Загрузка данных
                 rx_struct = load(rxFile, 'rx_waveform');
-                tx_struct = load(txFile, 'tx_waveform', 'coded_bits', 'tx_mod_symbols');
+                tx_struct = load(txFile, 'tx_waveform', 'coded_bits', 'source_bits', 'tx_mod_symbols');
                 
                 rx_waveform = rx_struct.rx_waveform;
                 
@@ -498,7 +499,7 @@ classdef OFDM_System < handle
                 detect = stf_h.detect(rx_waveform);
                 
                 if ~detect
-                    fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', 'FAIL:STF');
+                    fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', 'FAIL:STF');
                     continue;
                 end
                 
@@ -517,7 +518,7 @@ classdef OFDM_System < handle
                 est = ltf_h.estimate(rx_frame);
                 
                 if ~est
-                     fprintf('| %4d | %15s | %8s | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
+                     fprintf('| %4d | %15s | %8s | %8s | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
                      continue;
                 end
                 
@@ -544,13 +545,14 @@ classdef OFDM_System < handle
                 obj.data_handler.data     = tx_struct.coded_bits;
                 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [id_ifft_data, id_rx_res_data, id_rx_eqv_data, id_rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
+                [id_ifft_data, id_rx_res_data, id_decoded_res_data, id_rx_eqv_data, id_rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [ifft_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc);
+                [ifft_data, rx_res_data, decoded_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc);
                 % --- СТАТИСТИКА ---
                 
                 % BER
                 ber = mean(xor(rx_res_data(:), tx_struct.coded_bits(:)));
+                fec_ber = mean(xor(decoded_res_data(:), tx_struct.source_bits(:)));
                 id_ber = mean(xor(id_rx_res_data(:), tx_struct.coded_bits(:)));
 
                 Fig = figure(1);
@@ -594,10 +596,11 @@ classdef OFDM_System < handle
                  % 1. Вывод в консоль
                 snr = stf_h.snr-10*log10((obj.data_handler.Ndat+obj.data_handler.Npil)/obj.data_handler.N);
 
-                fprintf('| %4d | %3.3f (%3.3f) | %8.5f | %8.5f | %8.4f | %8.4f | %8.2e | %6s |\n', ...
-                    folderIdx, stf_h.snr, snr, id_ber, ber, id_rmse, rmse, stf_h.cfo, 'OK');
+                fprintf('| %4d | %3.3f (%3.3f) | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.2e | %6s |\n', ...
+                    folderIdx, stf_h.snr, snr, id_ber, ber, fec_ber, id_rmse, rmse, stf_h.cfo, 'OK');
                 
                 total_ber = total_ber + ber;
+                total_fec_ber = total_fec_ber + fec_ber;
                 total_rmse = total_rmse + rmse;
                 valid_count = valid_count + 1;
                 
@@ -696,8 +699,8 @@ classdef OFDM_System < handle
             end
             
             if valid_count > 0
-                fprintf('|%s|\n', repmat('-', 1, 89));
-                fprintf('Avg BER: %e | Avg RMSE: %f\n', total_ber/valid_count, total_rmse/valid_count);
+                fprintf('|%s|\n', repmat('-', 1, 100));
+                fprintf('Avg BER: %e | Avg BER(FEC): %e | Avg RMSE: %f\n', total_ber/valid_count, total_fec_ber/valid_count, total_rmse/valid_count);
             end
         end
         

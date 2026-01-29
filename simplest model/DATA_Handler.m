@@ -15,6 +15,7 @@ classdef DATA_Handler < handle
         right_guard
         pilotIdx
         payload
+        payload_per_symbol
 
         ofdm
         ofdmMod
@@ -37,6 +38,7 @@ classdef DATA_Handler < handle
         beta
 
         crcCfg
+        trellis
 
     end
 
@@ -64,6 +66,7 @@ classdef DATA_Handler < handle
             obj.L = options.L;
             obj.Npil = options.Npil;
             obj.Nsymb = options.Nsymb;
+            obj.trellis = poly2trellis(7, [133 171]);
             
             obj.ofdm = OFDM( ...
                 N=obj.N, ...
@@ -78,7 +81,9 @@ classdef DATA_Handler < handle
             obj.Mod_pow = options.Mod_pow;
             obj.Cod_rate = options.Cod_rate;
 
-            obj.payload = obj.Nsymb*(floor(obj.Ndat*obj.Cod_rate*obj.Mod_pow)-32);
+            obj.payload_per_symbol = floor(obj.Ndat*obj.Cod_rate*obj.Mod_pow)-32-6*(obj.Cod_rate~=1);
+            obj.payload_per_symbol = obj.payload_per_symbol - mod(obj.payload_per_symbol, obj.Mod_pow);
+            obj.payload = obj.Nsymb*obj.payload_per_symbol;
 
             obj.data = [];
             obj.mod_data = [];
@@ -104,28 +109,34 @@ classdef DATA_Handler < handle
             arguments
                 obj 
                 options.source_data = [] 
+                options.Nsymb = obj.Nsymb
             end
             
-            BPS = obj.payload/obj.Nsymb;
-
             if isempty(options.source_data)
-                options.source_data = randi([0, 1], BPS, obj.Nsymb);
+                options.source_data = randi([0, 1], obj.payload_per_symbol, options.Nsymb);
             else
-                options.source_data = reshape(options.source_data, BPS, obj.Nsymb);
+                options.source_data = reshape(options.source_data, obj.payload_per_symbol, options.Nsymb);
             end
 
-            source_bits = zeros(BPS+32, obj.Nsymb);
-            for i = 1:obj.Nsymb
-                source_bits(:,i) = crcGenerate(options.source_data(:,i), obj.crcCfg);
+            msg = crcGenerate(options.source_data, obj.crcCfg);
+            source_bits = zeros(obj.Ndat*obj.Mod_pow, options.Nsymb);
+
+            if obj.Cod_rate~=1
+                msg = vertcat(msg, zeros(6, options.Nsymb));
+                for i = 1:options.Nsymb
+                    source_bits(1:2*(obj.payload_per_symbol+32+6),i) = convenc(msg(:,i), obj.trellis);
+                end
+            else
+                for i = 1:options.Nsymb
+                    source_bits(1:obj.payload_per_symbol+32,i) = msg(:,i);
+                end
             end
+
             data = source_bits(:);
         end
 
         function waveform = get_waveform(obj, data)
             obj.data = reshape(data, [], 1);
-
-            obj.Nsymb = int32(length(data)/(obj.Ndat*obj.Mod_pow*obj.Cod_rate));
-            obj.payload = floor(obj.Nsymb*obj.Ndat*obj.Cod_rate*obj.Mod_pow);
 
             pilots = pskmod(zeros(obj.Npil, obj.Nsymb), 2);
             obj.mod_data = qammod(obj.data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
@@ -151,7 +162,7 @@ classdef DATA_Handler < handle
             eqv = obj.eqv;
         end
 
-        function [mod_data, rx_res_data, rx_eqv_data, rx_eqv_pilots] = get_data(obj, waveform, options)
+        function [mod_data, rx_res_data, rx_decoded_data, rx_eqv_data, rx_eqv_pilots] = get_data(obj, waveform, options)
             arguments
                 obj 
                 waveform 
@@ -163,6 +174,7 @@ classdef DATA_Handler < handle
             ifft_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
             pilots = complex(zeros(obj.Npil, obj.Nsymb));
             rx_eqv_data = zeros(size(ifft_data));
+            rx_decoded_data = zeros(obj.payload_per_symbol, obj.Nsymb);
             indices = (1:obj.ofdm.bandsize).';
 
             if ~isempty(options.source)
@@ -212,9 +224,9 @@ classdef DATA_Handler < handle
                 rx_eqv_data(:, i) = rx_eqv_data(:, i).*pilot_eqv;
                 rx_eqv_pilots = rx_eqv_data(obj.eqv_pilotIdx, i);
                 rx_eqv_data(:, i) = rx_eqv_data(:, i)./sqrt(mean(abs(rx_eqv_pilots.^2)));
-                
+                rx_res_data = rx_eqv_data(obj.dataIdx, i);
 
-                if ~isempty(options.source);
+                if ~isempty(options.source)
                     pilots = pskmod(zeros(obj.Npil, 1), 2);
                     rx_mod_res_data = qammod(options.source(:,i), 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
                 
@@ -231,12 +243,21 @@ classdef DATA_Handler < handle
                 end
 
 
-                rx_res_data = rx_eqv_data(obj.dataIdx, i);
                 rx_res_bin_data = qamdemod(rx_res_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
                 rx_res_bin_data = reshape(rx_res_bin_data, [], 1);
-                
-                [~,err] = crcDetect(rx_res_bin_data,obj.crcCfg);
-                
+
+                if obj.Cod_rate ~= 1
+                    decoded_data = rx_res_bin_data(1:2*(obj.payload_per_symbol+32+6),:);
+                    decoded_data = vitdec(decoded_data, obj.trellis, 35, "trunc", "hard");
+                    decoded_data = decoded_data(1:end-6, :);
+                    [~,err] = crcDetect(decoded_data,obj.crcCfg);
+                    rx_decoded_data(:,i) = decoded_data(1:end-32, :);
+                    rx_res_bin_data = obj.generate_data(source_data=rx_decoded_data(:, i), Nsymb=1);
+                else
+                    [~,err] = crcDetect(rx_res_bin_data,obj.crcCfg);
+                    rx_decoded_data(:,i) = rx_res_bin_data(1:obj.payload_per_symbol, :);
+                end
+
                 if ~(err&&options.crc)
                     pilots = pskmod(zeros(obj.Npil, 1), 2);
                     rx_mod_res_data = qammod(rx_res_bin_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
@@ -258,6 +279,9 @@ classdef DATA_Handler < handle
             
             rx_res_data     = qamdemod(rx_eqv_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
             rx_res_data     = reshape(rx_res_data, [], 1);
+
+            rx_decoded_data = reshape(rx_decoded_data, [], 1);
+
 
         end
 
