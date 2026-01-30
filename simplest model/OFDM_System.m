@@ -461,8 +461,6 @@ classdef OFDM_System < handle
             stf_h = STF_Handler(obj.stf, debug=false);
             ltf_h = LTF_Handler(obj.ltf, h_window=4*obj.Config.L, debug=false);
             
-            % DATA_Handler уже является частью obj, используем его
-            
             % Заголовок таблицы
             fprintf('| %4s | %15s | %8s | %8s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR (BB SNR)', 'BER(ID)','BER', 'BER(FEC)', 'RMSE(ID)', 'RMSE', 'CFO', 'Status');
             fprintf('|%s|\n', repmat('-', 1, 100));
@@ -494,7 +492,6 @@ classdef OFDM_System < handle
                 
                 % --- RECEIVER PIPELINE ---
                 
-                
                 % 1. STF Detection
                 detect = stf_h.detect(rx_waveform);
                 
@@ -504,15 +501,8 @@ classdef OFDM_System < handle
                 end
                 
                 % 2. Нарезка и CFO коррекция
-                % Берем длину TX пакета как ориентир сколько резать
-                len_packet = length(tx_struct.tx_waveform);
-                idx_end = min(length(rx_waveform), stf_h.sto + len_packet);
-                
-                rx_frame = rx_waveform(stf_h.sto : idx_end);
-                
-                % Компенсация частоты
-                t = (0 : length(rx_frame)-1).';
-                rx_frame = rx_frame .* exp(-2i*pi * stf_h.cfo * t);
+                rx_frame = rx_waveform(stf_h.sto : min(length(rx_waveform), stf_h.sto + length(tx_struct.tx_waveform)));
+                rx_frame = rx_frame .* exp(-2i*pi * stf_h.cfo * (0 : length(rx_frame)-1).');
                 
                 % 3. LTF Estimation
                 est = ltf_h.estimate(rx_frame);
@@ -524,39 +514,28 @@ classdef OFDM_System < handle
                 
                 % 4. Data Processing
                 % Смещение на начало данных (относительно начала rx_frame)
-                data_start_idx = ltf_h.sto;
-                
-                % Расчет длины данных в сэмплах
-                len_data_samples = obj.data_handler.Nsymb * (obj.data_handler.N + obj.data_handler.L);
-                
-                % Защита от выхода за границы массива
-                % if data_start_idx + len_data_samples - 1 > length(rx_frame)
-                rx_data_wav = rx_frame(data_start_idx : end);
-                
-                % else
-                    % rx_data_wav = rx_frame(data_start_idx : data_start_idx + len_data_samples - 1);
-                % end
-                
-                % % Передача эквалайзера и данных в handler
-                % ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                
-                % Для корректного расчета RMSE внутри handler (опционально)
-                obj.data_handler.mod_data = tx_struct.tx_mod_symbols;
-                obj.data_handler.data     = tx_struct.coded_bits;
+                rx_data_wav = rx_frame(ltf_h.sto : end);
                 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [id_ifft_data, id_rx_res_data, id_decoded_res_data, id_rx_eqv_data, id_rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
+                [id_ifft_data, id_rx_res_data, ~, id_rx_eqv_data, id_rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
                 [ifft_data, rx_res_data, decoded_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc);
-                % --- СТАТИСТИКА ---
                 
                 % BER
-                ber = mean(xor(rx_res_data(:), tx_struct.coded_bits(:)));
-                fec_ber = mean(xor(decoded_res_data(:), tx_struct.source_bits(:)));
-                id_ber = mean(xor(id_rx_res_data(:), tx_struct.coded_bits(:)));
+                err     = xor(rx_res_data(:), tx_struct.coded_bits(:));
+                fec_err = xor(decoded_res_data(:), tx_struct.source_bits(:));
+                id_err  = xor(id_rx_res_data(:), tx_struct.coded_bits(:));
+
+                ber     = mean(err);
+                fec_ber = mean(fec_err);
+                id_ber  = mean(id_err);
+
+                err     = reshape(err,      [], obj.data_handler.Nsymb);
+                fec_err = reshape(fec_err,  [], obj.data_handler.Nsymb);
+
 
                 Fig = figure(1);
-                clf;
+                clf();
                 t = tiledlayout(Fig, 3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 
                 nexttile;
@@ -695,6 +674,25 @@ classdef OFDM_System < handle
                 
                 setappdata(eFig, 'graphics_linkprop1', hLink1);
                 setappdata(eFig, 'graphics_linkprop2', hLink2);
+
+                eFig = figure(5);
+                t = tiledlayout(eFig, 2, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+                clf(eFig);
+
+                ax1 = nexttile;
+                imagesc(ax1, err);
+                title(ax1, sprintf('Frame %d BER', folderIdx));
+                colormap(ax1, 'gray');    
+                axis(ax1, 'xy');            
+                xlabel(ax1, 'Time / Index');
+                
+                ax2 = nexttile;
+                imagesc(ax2, fec_err);
+                title(ax2, sprintf('Frame %d FEC BER', folderIdx));
+                colormap(ax2, 'gray');    
+                axis(ax2, 'xy');            
+                xlabel(ax2, 'Time / Index');
+                ylabel(ax2, 'Frequency / Range');
 
             end
             

@@ -66,7 +66,7 @@ classdef DATA_Handler < handle
             obj.L = options.L;
             obj.Npil = options.Npil;
             obj.Nsymb = options.Nsymb;
-            obj.trellis = poly2trellis(7, [133 171]);
+            obj.trellis = poly2trellis(7, [171, 133], 171);
             
             obj.ofdm = OFDM( ...
                 N=obj.N, ...
@@ -149,7 +149,6 @@ classdef DATA_Handler < handle
             end
 
             obj.waveform = obj.waveform(:);
-            
             obj.waveform = obj.waveform./sqrt((mean(abs(obj.waveform.^2))));
             waveform = obj.waveform;
         end
@@ -162,7 +161,7 @@ classdef DATA_Handler < handle
             eqv = obj.eqv;
         end
 
-        function [mod_data, rx_res_data, rx_decoded_data, rx_eqv_data, rx_eqv_pilots] = get_data(obj, waveform, options)
+        function [mod_data, coded_data, decoded_data, eqv_data, eqv_pilots] = get_data(obj, waveform, options)
             arguments
                 obj 
                 waveform 
@@ -173,8 +172,8 @@ classdef DATA_Handler < handle
             mod_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
             ifft_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
             pilots = complex(zeros(obj.Npil, obj.Nsymb));
-            rx_eqv_data = zeros(size(ifft_data));
-            rx_decoded_data = zeros(obj.payload_per_symbol, obj.Nsymb);
+            eqv_data = zeros(size(ifft_data));
+            decoded_data = zeros(obj.payload_per_symbol, obj.Nsymb);
             indices = (1:obj.ofdm.bandsize).';
 
             if ~isempty(options.source)
@@ -214,17 +213,17 @@ classdef DATA_Handler < handle
                 [ifft_data(:, i), ~, ~] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
                 iter = iter+obj.N+obj.L;
 
-                rx_eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
+                eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
                 
-                pilot_eqv = rx_eqv_data(obj.eqv_pilotIdx, i);
+                pilot_eqv = eqv_data(obj.eqv_pilotIdx, i);
                 pilot_eqv = interp1(obj.eqv_pilotIdx, pilot_eqv, indices, 'linear', 'extrap');
                 pilot_eqv = (1-obj.alpha)*ones(size(pilot_eqv))+obj.alpha*pilot_eqv;
                 pilot_eqv = conj(pilot_eqv)./(abs(pilot_eqv.^2)+1e-3);
                 
-                rx_eqv_data(:, i) = rx_eqv_data(:, i).*pilot_eqv;
-                rx_eqv_pilots = rx_eqv_data(obj.eqv_pilotIdx, i);
-                rx_eqv_data(:, i) = rx_eqv_data(:, i)./sqrt(mean(abs(rx_eqv_pilots.^2)));
-                rx_res_data = rx_eqv_data(obj.dataIdx, i);
+                eqv_data(:, i) = eqv_data(:, i).*pilot_eqv;
+                eqv_pilots = eqv_data(obj.eqv_pilotIdx, i);
+                eqv_data(:, i) = eqv_data(:, i)./sqrt(mean(abs(eqv_pilots.^2)));
+                coded_data = eqv_data(obj.dataIdx, i);
 
                 if ~isempty(options.source)
                     pilots = pskmod(zeros(obj.Npil, 1), 2);
@@ -242,25 +241,30 @@ classdef DATA_Handler < handle
                     continue
                 end
 
-
-                rx_res_bin_data = qamdemod(rx_res_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
-                rx_res_bin_data = reshape(rx_res_bin_data, [], 1);
+                coded_data = qamdemod(coded_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
+                coded_data = reshape(coded_data, [], 1);
 
                 if obj.Cod_rate ~= 1
-                    decoded_data = rx_res_bin_data(1:2*(obj.payload_per_symbol+32+6),:);
-                    decoded_data = vitdec(decoded_data, obj.trellis, 35, "trunc", "hard");
-                    decoded_data = decoded_data(1:end-6, :);
-                    [~,err] = crcDetect(decoded_data,obj.crcCfg);
-                    rx_decoded_data(:,i) = decoded_data(1:end-32, :);
-                    rx_res_bin_data = obj.generate_data(source_data=rx_decoded_data(:, i), Nsymb=1);
+                    buf = coded_data(1:2*(obj.payload_per_symbol+32+6),:);
+                    buf = vitdec(buf, obj.trellis, 35, "trunc", "hard");
+                    buf = buf(1:end-6, :);
+                    [~,err] = crcDetect(buf,obj.crcCfg);
+
+                    if ~err
+                        decoded_data(:,i) = buf(1:end-32, :);
+                    else
+                        decoded_data(:,i) = coded_data(1:2:2*(obj.payload_per_symbol),:);
+                    end
+
+                    coded_data = obj.generate_data(source_data=decoded_data(:, i), Nsymb=1);
                 else
-                    [~,err] = crcDetect(rx_res_bin_data,obj.crcCfg);
-                    rx_decoded_data(:,i) = rx_res_bin_data(1:obj.payload_per_symbol, :);
+                    [~,err] = crcDetect(coded_data,obj.crcCfg);
+                    decoded_data(:,i) = coded_data(1:obj.payload_per_symbol, :);
                 end
 
                 if ~(err&&options.crc)
                     pilots = pskmod(zeros(obj.Npil, 1), 2);
-                    rx_mod_res_data = qammod(rx_res_bin_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
+                    rx_mod_res_data = qammod(coded_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
                     
                     [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
     
@@ -274,14 +278,10 @@ classdef DATA_Handler < handle
 
             end
 
-            rx_eqv_pilots   = rx_eqv_data(obj.eqv_pilotIdx, :);
-            rx_eqv_data     = rx_eqv_data(obj.dataIdx, :);
-            
-            rx_res_data     = qamdemod(rx_eqv_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
-            rx_res_data     = reshape(rx_res_data, [], 1);
-
-            rx_decoded_data = reshape(rx_decoded_data, [], 1);
-
+            eqv_pilots      = eqv_data(obj.eqv_pilotIdx, :);
+            eqv_data        = eqv_data(obj.dataIdx, :);
+            coded_data      = reshape(qamdemod(eqv_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true), [], 1);
+            decoded_data    = reshape(decoded_data, [], 1);
 
         end
 
