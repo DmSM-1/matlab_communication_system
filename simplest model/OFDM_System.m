@@ -441,7 +441,7 @@ classdef OFDM_System < handle
             fprintf('--- Start Processing Dataset (Rx Analysis) ---\n');
             fprintf('Directory: %s\n', obj.OutputDir);
 
-            % 1. Сканируем папки
+            % 1. SCAN DIRECTORIES
             files = dir(obj.OutputDir);
             subDirs = files([files.isdir]);
             folderNames = {subDirs.name};
@@ -456,12 +456,11 @@ classdef OFDM_System < handle
             
             totalFrames = length(validNums);
             
-            % 2. Инициализация Хендлеров (используем конфиги из self)
-            % Создаем локальные экземпляры для обработки
+            % 2. INIT STF&LTF handlers
             stf_h = STF_Handler(obj.stf, debug=false);
             ltf_h = LTF_Handler(obj.ltf, h_window=4*obj.Config.L, debug=false);
             
-            % Заголовок таблицы
+            % HEADER TITLE
             fprintf('| %4s | %15s | %8s | %8s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR (BB SNR)', 'BER(ID)','BER', 'BER(FEC)', 'RMSE(ID)', 'RMSE', 'CFO', 'Status');
             fprintf('|%s|\n', repmat('-', 1, 100));
 
@@ -470,7 +469,13 @@ classdef OFDM_System < handle
             total_rmse = 0;
             valid_count = 0;
 
-            % 3. Цикл по датасету
+            fig1 = figure(1);
+            fig2 = figure(2);
+            fig3 = figure(3);
+            fig4 = figure(4);
+            fig5 = figure(5);
+
+            % 3. RECEIVER LOOP
             for i = 1:totalFrames
                 folderIdx = validNums(i);
                 currentDir = fullfile(obj.OutputDir, num2str(folderIdx));
@@ -478,13 +483,13 @@ classdef OFDM_System < handle
                 rxFile = fullfile(currentDir, 'rx_data.mat');
                 txFile = fullfile(currentDir, 'tx_data.mat');
                 
-                % Проверка наличия файлов
+                % CHECK FILE EXISTANCE
                 if ~exist(rxFile, 'file') || ~exist(txFile, 'file')
                     fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', 'NO FILE');
                     continue;
                 end
                 
-                % Загрузка данных
+                % LOAD DATA
                 rx_struct = load(rxFile, 'rx_waveform');
                 tx_struct = load(txFile, 'tx_waveform', 'coded_bits', 'source_bits', 'tx_mod_symbols');
                 
@@ -492,7 +497,7 @@ classdef OFDM_System < handle
                 
                 % --- RECEIVER PIPELINE ---
                 
-                % 1. STF Detection
+                %STF Detection & CFO, SNR estimation
                 detect = stf_h.detect(rx_waveform);
                 
                 if ~detect
@@ -500,11 +505,10 @@ classdef OFDM_System < handle
                     continue;
                 end
                 
-                % 2. Нарезка и CFO коррекция
                 rx_frame = rx_waveform(stf_h.sto : min(length(rx_waveform), stf_h.sto + length(tx_struct.tx_waveform)));
                 rx_frame = rx_frame .* exp(-2i*pi * stf_h.cfo * (0 : length(rx_frame)-1).');
                 
-                % 3. LTF Estimation
+                %LTF Estimation 
                 est = ltf_h.estimate(rx_frame);
                 
                 if ~est
@@ -512,187 +516,193 @@ classdef OFDM_System < handle
                      continue;
                 end
                 
-                % 4. Data Processing
-                % Смещение на начало данных (относительно начала rx_frame)
+                %Data Processing
                 rx_data_wav = rx_frame(ltf_h.sto : end);
                 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [id_ifft_data, id_rx_res_data, ~, id_rx_eqv_data, id_rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
+                [id_rx_eqv_data, id_rx_eqv_pilots, id_ifft_data, id_rx_res_data, decoded_id_res_data] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [ifft_data, rx_res_data, decoded_res_data, rx_eqv_data, rx_eqv_pilots] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc);
+                [rx_eqv_data, rx_eqv_pilots, ifft_data, rx_res_data, decoded_res_data] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc);
                 
-                % BER
-                err     = xor(rx_res_data(:), tx_struct.coded_bits(:));
-                fec_err = xor(decoded_res_data(:), tx_struct.source_bits(:));
-                id_err  = xor(id_rx_res_data(:), tx_struct.coded_bits(:));
+                % ERRORS 
+                err         = xor(rx_res_data(:), tx_struct.coded_bits(:));
+                fec_err     = xor(decoded_res_data(:), tx_struct.source_bits(:));
+                id_err      = xor(id_rx_res_data(:), tx_struct.coded_bits(:));
 
-                ber     = mean(err);
-                fec_ber = mean(fec_err);
-                id_ber  = mean(id_err);
+                ber         = mean(err);
+                fec_ber     = mean(fec_err);
+                id_ber      = mean(id_err);
 
-                err     = reshape(err,      [], obj.data_handler.Nsymb);
-                fec_err = reshape(fec_err,  [], obj.data_handler.Nsymb);
+                err         = reshape(err,      [], obj.data_handler.Nsymb);
+                fec_err     = reshape(fec_err,  [], obj.data_handler.Nsymb);
 
+                abs_err     = abs(rx_eqv_data - tx_struct.tx_mod_symbols);
+                id_abs_err  = abs(id_rx_eqv_data - tx_struct.tx_mod_symbols);
 
-                Fig = figure(1);
-                clf();
-                t = tiledlayout(Fig, 3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                rmse        = sqrt(mean(abs_err(:).^2));
+                id_rmse     = sqrt(mean(id_abs_err(:).^2));
 
-                nexttile;
-                plot(abs(rx_waveform));
-                title("Signal amplitude");
-
-                nexttile;
-                plot(obj.data_handler.ang);
-                title("Pilot phase diviation");
-
-                nexttile;
-                plot(abs(ltf_eqv));
-                title("LTF AFC");
-                nexttile;
-                plot(unwrap(angle(ltf_eqv)));
-                title("LTF PFC");
-
-                nexttile;
-                plot(abs(obj.data_handler.eqv));
-                title("Last symb AFC");
-                nexttile;
-                plot(unwrap(angle(obj.data_handler.eqv)));
-                title("Last symb PFC");
-
-                figure(2);
-                clf;
-                spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
-                max_val = max(10*log10(abs(rx_waveform).^2)); % Аналог db()
-                clim([max_val-50, max_val]);
-                title(sprintf('Frame %d Spectrogram', folderIdx));
-                         
-                % RMSE
-                rmse = sqrt(mean(abs(rx_eqv_data(:) - tx_struct.tx_mod_symbols(:)).^2));
-                id_rmse = sqrt(mean(abs(id_rx_eqv_data(:) - tx_struct.tx_mod_symbols(:)).^2));
-                
-                % Вывод
-                 % 1. Вывод в консоль
-                snr = stf_h.snr-10*log10((obj.data_handler.Ndat+obj.data_handler.Npil)/obj.data_handler.N);
-
-                fprintf('| %4d | %3.3f (%3.3f) | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.2e | %6s |\n', ...
-                    folderIdx, stf_h.snr, snr, id_ber, ber, fec_ber, id_rmse, rmse, stf_h.cfo, 'OK');
-                
                 total_ber = total_ber + ber;
                 total_fec_ber = total_fec_ber + fec_ber;
                 total_rmse = total_rmse + rmse;
                 valid_count = valid_count + 1;
-                
-                % 2. Сохранение результатов в MAT (в папку пакета)
-                resFile = fullfile(currentDir, 'results.mat');
-                save(resFile, 'ber', 'rmse', 'stf_h');
-
-                % 3. Сохранение в CSV (в основную директорию)
-                csvPath = fullfile(obj.OutputDir, 'statistics.csv');
-                
-                % Открываем файл на дозапись (permission 'a')
-                fid = fopen(csvPath, 'a');
-                if fid ~= -1
-                    % Если это первый успешный пакет, пишем заголовок
-                    if valid_count == 1
-                        fprintf(fid, 'FolderID,SNR,BER,RMSE,CFO_Est\n');
+               
+                %RESULTS
+                    %CONSOL OUTPUT
+                    snr_bb_gain = -10*log10((obj.data_handler.Ndat+obj.data_handler.Npil)/obj.data_handler.N);
+                    snr = stf_h.snr+snr_bb_gain;
+                    fprintf('| %4d | %3.3f (%3.3f) | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.2e | %6s |\n', ...
+                        folderIdx, stf_h.snr, snr, id_ber, ber, fec_ber, id_rmse, rmse, stf_h.cfo, 'OK');
+                    
+                    %SAVE RESULTS IN MAT
+                    resFile = fullfile(currentDir, 'results.mat');
+                    save(resFile, 'ber', 'rmse', 'stf_h');
+    
+                    %SAVE RESULTS IN CVS
+                    csvPath = fullfile(obj.OutputDir, 'statistics.csv');
+                    
+                    fid = fopen(csvPath, 'a');
+                    if fid ~= -1
+                        if valid_count == 1
+                            fprintf(fid, 'FolderID, SNR, MS_SNR,BER,FEC_BER,ID_BER,RMSE, ID_RMSE,\n');
+                        end
+                        fprintf(fid, '%d,%f,%f,%f,%f,%f,%f,%f\n', folderIdx, obj.chan.SNR+snr_bb_gain, snr, ber, fec_ber, id_ber, rmse, id_rmse);
+                        fclose(fid);
                     end
-                    % Пишем данные
-                    fprintf(fid, '%d,%.6f,%.6f,%.6f,%.6e\n', folderIdx, snr, ber, rmse, stf_h.cfo);
-                    fclose(fid);
-                end
 
-                % 4. Построение и сохранение графика
-                hFig = figure(3);
-                % set(hFig, 'Visible', 'off'); % Раскомментируйте, чтобы окна не мелькали
-                clf(hFig);
+                %PLOTS
+                %DUMP
+                set(0, 'CurrentFigure', fig1);
+                    clf;
+                    t = tiledlayout(fig1, 3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    
+                    nexttile;
+                    plot(abs(rx_waveform));
+                    title("Signal amplitude");
+    
+                    nexttile;
+                    plot(obj.data_handler.ang);
+                    title("Pilot phase diviation");
+    
+                    nexttile;
+                    plot(abs(ltf_eqv));
+                    title("LTF AFC");
+                    nexttile;
+                    plot(unwrap(angle(ltf_eqv)));
+                    title("LTF PFC");
+    
+                    nexttile;
+                    plot(abs(obj.data_handler.eqv));
+                    title("Last symb AFC");
+                    nexttile;
+                    plot(unwrap(angle(obj.data_handler.eqv)));
+                    title("Last symb PFC");
+    
+                %SPECTROGRAM
+                set(0, 'CurrentFigure', fig2);
+                    clf;
+                    spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
+                    max_val = max(10*log10(abs(rx_waveform).^2));
+                    clim([max_val-50, max_val]);
+                    title(sprintf('Frame %d Spectrogram', folderIdx));
+                      
+                %IQ    
+                set(0, 'CurrentFigure', fig3);
+                    clf;
+                    t = tiledlayout(fig3, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                    
+                    ifft_data_plot = ifft_data ./ sqrt(mean(abs(ifft_data.^2), 'all'));
+                    
+                    nexttile;
+                    scatter(real(ifft_data_plot(:)), imag(ifft_data_plot(:)), 3, 'blue', '.');
+                    hold on;
+                    scatter(real(rx_eqv_data(:)), imag(rx_eqv_data(:)), 3, 'red', '.');
+                    scatter(real(rx_eqv_pilots(:)), imag(rx_eqv_pilots(:)), 7, 'green', '.');
+                    hold off;
+                    
+                    xlim([-2, 2]);
+                    ylim([-2, 2]);
+                    axis("square");
+                    grid on;
+                    title(sprintf('Constellation (BER: %.1e)', ber));
+    
+                    id_ifft_data_plot = id_ifft_data ./ sqrt(mean(abs(id_ifft_data.^2), 'all'));
+    
+                    nexttile;
+                    scatter(real(id_ifft_data_plot(:)), imag(id_ifft_data_plot(:)), 3, 'blue', '.');
+                    hold on;
+                    scatter(real(id_rx_eqv_data(:)), imag(id_rx_eqv_data(:)), 3, 'red', '.');
+                    scatter(real(id_rx_eqv_pilots(:)), imag(id_rx_eqv_pilots(:)), 7, 'green', '.');
+                    hold off;
+                    
+                    xlim([-2, 2]);
+                    ylim([-2, 2]);
+                    axis("square");
+                    grid on;
+                    title(sprintf('Constellation (id)'));
                 
-                t = tiledlayout(hFig, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-                
-                ifft_data_plot = ifft_data ./ sqrt(mean(abs(ifft_data.^2), 'all'));
-                
-                nexttile;
-                scatter(real(ifft_data_plot(:)), imag(ifft_data_plot(:)), 3, 'blue', '.');
-                hold on;
-                scatter(real(rx_eqv_data(:)), imag(rx_eqv_data(:)), 3, 'red', '.');
-                scatter(real(rx_eqv_pilots(:)), imag(rx_eqv_pilots(:)), 7, 'green', '.');
-                hold off;
-                
-                xlim([-2, 2]);
-                ylim([-2, 2]);
-                axis("square");
-                grid on;
-                title(sprintf('Constellation (BER: %.1e)', ber));
+                %ABS ERROR
+                set(0, 'CurrentFigure', fig4);
+                    clf;
 
-                id_ifft_data_plot = id_ifft_data ./ sqrt(mean(abs(id_ifft_data.^2), 'all'));
+                    if isappdata(fig4, 'graphics_linkprop1')
+                        rmappdata(fig4, 'graphics_linkprop1'); 
+                    end
+                    if isappdata(fig4, 'graphics_linkprop2')
+                        rmappdata(fig4, 'graphics_linkprop2')
+                    end
 
-                nexttile;
-                scatter(real(id_ifft_data_plot(:)), imag(id_ifft_data_plot(:)), 3, 'blue', '.');
-                hold on;
-                scatter(real(id_rx_eqv_data(:)), imag(id_rx_eqv_data(:)), 3, 'red', '.');
-                scatter(real(id_rx_eqv_pilots(:)), imag(id_rx_eqv_pilots(:)), 7, 'green', '.');
-                hold off;
-                
-                xlim([-2, 2]);
-                ylim([-2, 2]);
-                axis("square");
-                grid on;
-                title(sprintf('Constellation (id)'));
-                
-                % Сохранение графика в папку пакета
+                    t = tiledlayout(fig4, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    
+                    ax1 = nexttile;
+                    mesh(ax1, abs_err);
+                    title(ax1, sprintf('Frame %d RMSE', folderIdx));
+                    colormap(ax1, 'jet');    
+                    axis(ax1, 'xy');            
+                    xlabel(ax1, 'Time / Index');
+                    ylabel(ax1, 'Frequency / Range');
+                    zlim(ax1, [0, 1]);
+                    clim(ax1, [0, 1]);
+                    
+                    ax2 = nexttile;
+                    mesh(ax2, id_abs_err);
+                    title(ax2, sprintf('Frame %d RMSE (id)', folderIdx));
+                    colormap(ax2, 'jet');    
+                    axis(ax2, 'xy');            
+                    xlabel(ax2, 'Time / Index');
+                    ylabel(ax2, 'Frequency / Range');
+                    zlim(ax2, [0, 1]);
+                    clim(ax2, [0, 1]);
+                    
+                    hLink1 = linkprop([ax1, ax2], {'CameraPosition', 'CameraUpVector', 'CameraViewAngle'});
+                    hLink2 = linkprop([ax1, ax2], {'XLim', 'YLim', 'ZLim'});
+                    
+                    setappdata(fig4, 'graphics_linkprop1', hLink1);
+                    setappdata(fig4, 'graphics_linkprop2', hLink2);
+
+                %BIT ERROR
+                set(0, 'CurrentFigure', fig5);
+                    clf();
+                    t = tiledlayout(fig5, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    
+                    ax1 = nexttile;
+                    imagesc(ax1, err);
+                    title(ax1, sprintf('Frame %d BER', folderIdx));
+                    colormap(ax1, 'gray');    
+                    axis(ax1, 'xy');            
+                    xlabel(ax1, 'Time / Index');
+                    
+                    ax2 = nexttile;
+                    imagesc(ax2, fec_err);
+                    title(ax2, sprintf('Frame %d FEC BER', folderIdx));
+                    colormap(ax2, 'gray');    
+                    axis(ax2, 'xy');            
+                    xlabel(ax2, 'Time / Index');
+                    ylabel(ax2, 'Frequency / Range');
+
+                % SAVE PLOTS
                 plotPath = fullfile(currentDir, 'analysis_plot.png');
-                exportgraphics(hFig, plotPath, 'Resolution', 300);
-
-                eFig = figure(4);
-                t = tiledlayout(eFig, 2, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
-                clf(eFig);
-
-                ax1 = nexttile;
-                error1 = abs(rx_eqv_data - tx_struct.tx_mod_symbols);
-                mesh(ax1, error1);
-                title(ax1, sprintf('Frame %d RMSE', folderIdx));
-                colormap(ax1, 'jet');    
-                axis(ax1, 'xy');            
-                xlabel(ax1, 'Time / Index');
-                ylabel(ax1, 'Frequency / Range');
-                zlim(ax1, [0, 1]);
-                clim(ax1, [0, 1]);
-                
-                ax2 = nexttile;
-                error2 = abs(id_rx_eqv_data - tx_struct.tx_mod_symbols);
-                mesh(ax2, error2);
-                title(ax2, sprintf('Frame %d RMSE (id)', folderIdx));
-                colormap(ax2, 'jet');    
-                axis(ax2, 'xy');            
-                xlabel(ax2, 'Time / Index');
-                ylabel(ax2, 'Frequency / Range');
-                zlim(ax2, [0, 1]);
-                clim(ax2, [0, 1]);
-                
-                hLink1 = linkprop([ax1, ax2], {'CameraPosition', 'CameraUpVector', 'CameraViewAngle'});
-                hLink2 = linkprop([ax1, ax2], {'XLim', 'YLim', 'ZLim'});
-                
-                setappdata(eFig, 'graphics_linkprop1', hLink1);
-                setappdata(eFig, 'graphics_linkprop2', hLink2);
-
-                eFig = figure(5);
-                t = tiledlayout(eFig, 2, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
-                clf(eFig);
-
-                ax1 = nexttile;
-                imagesc(ax1, err);
-                title(ax1, sprintf('Frame %d BER', folderIdx));
-                colormap(ax1, 'gray');    
-                axis(ax1, 'xy');            
-                xlabel(ax1, 'Time / Index');
-                
-                ax2 = nexttile;
-                imagesc(ax2, fec_err);
-                title(ax2, sprintf('Frame %d FEC BER', folderIdx));
-                colormap(ax2, 'gray');    
-                axis(ax2, 'xy');            
-                xlabel(ax2, 'Time / Index');
-                ylabel(ax2, 'Frequency / Range');
+                exportgraphics(fig3, plotPath, 'Resolution', 300);
 
             end
             

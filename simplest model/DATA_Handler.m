@@ -161,7 +161,7 @@ classdef DATA_Handler < handle
             eqv = obj.eqv;
         end
 
-        function [mod_data, coded_data, decoded_data, eqv_data, eqv_pilots] = get_data(obj, waveform, options)
+        function [eqv_data, eqv_pilots, mod_data, coded_data, decoded_data] = get_data(obj, waveform, options)
             arguments
                 obj 
                 waveform 
@@ -275,7 +275,6 @@ classdef DATA_Handler < handle
                 else
                     obj.eqv = obj.eqv.*exp(-1i*sfo*t);
                 end
-
             end
 
             eqv_pilots      = eqv_data(obj.eqv_pilotIdx, :);
@@ -284,6 +283,5 @@ classdef DATA_Handler < handle
             decoded_data    = reshape(decoded_data, [], 1);
 
         end
-
     end
 end
