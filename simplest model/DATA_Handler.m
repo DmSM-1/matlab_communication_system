@@ -14,6 +14,7 @@ classdef DATA_Handler < handle
         left_guard
         right_guard
         pilotIdx
+        pilAmpl
         payload
         payload_per_symbol
 
@@ -40,6 +41,8 @@ classdef DATA_Handler < handle
         crcCfg
         trellis
 
+        interleaver
+
     end
 
     methods
@@ -49,12 +52,13 @@ classdef DATA_Handler < handle
                 options.L = 16;
                 options.Ndat = 48;
                 options.Npil = 2;
+                options.pilAmpl = 5.0;
                 options.Bw = 0.5;
 
                 options.Mod_pow = 1;
                 options.Nsymb = 1;
                 options.Cod_rate = 1;
-                options.alpha = 0.1;
+                options.alpha = 1.0;
                 options.beta = 0.1;
                 options.guards = [];
                 options.DC_guard = 1;
@@ -65,6 +69,7 @@ classdef DATA_Handler < handle
             obj.N = options.N;
             obj.L = options.L;
             obj.Npil = options.Npil;
+            obj.pilAmpl = options.pilAmpl;
             obj.Nsymb = options.Nsymb;
             obj.trellis = poly2trellis(7, [171, 133], 171);
             
@@ -84,6 +89,12 @@ classdef DATA_Handler < handle
             obj.payload_per_symbol = floor(obj.Ndat*obj.Cod_rate*obj.Mod_pow)-32-6*(obj.Cod_rate~=1);
             obj.payload_per_symbol = obj.payload_per_symbol - mod(obj.payload_per_symbol, obj.Mod_pow);
             obj.payload = obj.Nsymb*obj.payload_per_symbol;
+
+            % sp = int32(floor(sqrt(2*(obj.payload_per_symbol+32+6))));
+            % obj.interleaver = reshape(1:sp^2, sp, sp);
+            % obj.interleaver = obj.interleaver.';
+            % obj.interleaver = [obj.interleaver(:); (sp^2+1:2*(obj.payload_per_symbol+32+6)).'];
+            % obj.interleaver = (1:obj.payload_per_symbol+32).';
 
             obj.data = [];
             obj.mod_data = [];
@@ -119,12 +130,14 @@ classdef DATA_Handler < handle
             end
 
             msg = crcGenerate(options.source_data, obj.crcCfg);
+            
             source_bits = zeros(obj.Ndat*obj.Mod_pow, options.Nsymb);
 
             if obj.Cod_rate~=1
                 msg = vertcat(msg, zeros(6, options.Nsymb));
                 for i = 1:options.Nsymb
                     source_bits(1:2*(obj.payload_per_symbol+32+6),i) = convenc(msg(:,i), obj.trellis);
+                    % source_bits(obj.interleaver,i) = convenc(msg(:,i), obj.trellis);
                 end
             else
                 for i = 1:options.Nsymb
@@ -138,7 +151,7 @@ classdef DATA_Handler < handle
         function waveform = get_waveform(obj, data)
             obj.data = reshape(data, [], 1);
 
-            pilots = pskmod(zeros(obj.Npil, obj.Nsymb), 2);
+            pilots = pskmod(zeros(obj.Npil, obj.Nsymb), 2).*obj.pilAmpl;
             obj.mod_data = qammod(obj.data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
             obj.mod_data = reshape(obj.mod_data, obj.Ndat, []);
 
@@ -149,7 +162,8 @@ classdef DATA_Handler < handle
             end
 
             obj.waveform = obj.waveform(:);
-            obj.waveform = obj.waveform./sqrt((mean(abs(obj.waveform.^2))));
+            obj.waveform = obj.waveform*obj.N/sqrt(length(obj.activeIdx));
+
             waveform = obj.waveform;
         end
 
@@ -159,6 +173,30 @@ classdef DATA_Handler < handle
             obj.eqv = obj.eqv(obj.ofdm.left_guard:obj.ofdm.right_guard);
 
             eqv = obj.eqv;
+        end
+
+        function [cfo, sfo] = get_freq(obj, waveform)
+            mod_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
+            pilots = complex(zeros(obj.Npil, obj.Nsymb));
+
+            iter = 0;
+            
+            for i = 1:obj.Nsymb
+                [mod_data(:, i), ~, pilots(:, i)] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
+                iter = iter+(obj.N+obj.L);
+            end
+
+            pilots = unwrap(angle(pilots.'));
+            
+            sfo = median(diff(pilots(:,obj.Npil)-pilots(:,1)));
+            sfo = sfo/(obj.ofdm.pilots(obj.Npil)-obj.ofdm.pilots(1));
+            
+            pilots = mean(pilots, 2);
+
+            x = double(1:obj.Nsymb);
+            p = polyfit(x, pilots, 1);
+            cfo = p(1)/(obj.L+obj.N);
+
         end
 
         function [eqv_data, eqv_pilots, mod_data, coded_data, decoded_data] = get_data(obj, waveform, options)
@@ -199,6 +237,7 @@ classdef DATA_Handler < handle
             p = polyfit(x, pilots, 1);
             dp = p(1)/(obj.L+obj.N);
             phase = 0;
+            
             for i = 1:length(waveform)
                 phase = phase + dp;
                 waveform(i) = waveform(i)*exp(-1i*phase);
@@ -209,24 +248,34 @@ classdef DATA_Handler < handle
             t = t.';
             t = t-length(obj.eqv)/2;
             
+            
             for i = 1:obj.Nsymb
                 [ifft_data(:, i), ~, ~] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
                 iter = iter+obj.N+obj.L;
 
                 eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
                 
-                pilot_eqv = eqv_data(obj.eqv_pilotIdx, i);
-                pilot_eqv = interp1(obj.eqv_pilotIdx, pilot_eqv, indices, 'linear', 'extrap');
+                pilot_eqv = eqv_data(obj.eqv_pilotIdx, i)./obj.pilAmpl;
+
+                
+                pilot_eqv = interp1(obj.eqv_pilotIdx, abs(pilot_eqv), indices, 'linear', 'extrap') .* ...
+                            exp(1i*interp1(obj.eqv_pilotIdx, unwrap(angle(pilot_eqv)), indices, 'linear', 'extrap'));
+
+                % pilot_eqv = idct([dct(abs(pilot_eqv)); zeros(obj.ofdm.bandsize-obj.Npil, 1)])*sqrt(obj.ofdm.bandsize/obj.Npil) .* ...
+                %             exp(1i*interp1(obj.eqv_pilotIdx, unwrap(angle(pilot_eqv)), indices, 'linear', 'extrap'));
+
                 pilot_eqv = (1-obj.alpha)*ones(size(pilot_eqv))+obj.alpha*pilot_eqv;
                 pilot_eqv = conj(pilot_eqv)./(abs(pilot_eqv.^2)+1e-3);
                 
                 eqv_data(:, i) = eqv_data(:, i).*pilot_eqv;
-                eqv_pilots = eqv_data(obj.eqv_pilotIdx, i);
+                
+                eqv_pilots = eqv_data(obj.eqv_pilotIdx, i)./obj.pilAmpl;
                 eqv_data(:, i) = eqv_data(:, i)./sqrt(mean(abs(eqv_pilots.^2)));
                 coded_data = eqv_data(obj.dataIdx, i);
 
+                
                 if ~isempty(options.source)
-                    pilots = pskmod(zeros(obj.Npil, 1), 2);
+                    pilots = pskmod(zeros(obj.Npil, 1), 2)*obj.pilAmpl;
                     rx_mod_res_data = qammod(options.source(:,i), 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
                 
                     [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
@@ -241,12 +290,20 @@ classdef DATA_Handler < handle
                     continue
                 end
 
+                % noise_var = 10^(-20/20);
+                % llr_data = qamdemod(coded_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'llr', 'UnitAveragePower', true);
+                % llr_data = reshape(llr_data, [], 1);
+
                 coded_data = qamdemod(coded_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
                 coded_data = reshape(coded_data, [], 1);
 
                 if obj.Cod_rate ~= 1
                     buf = coded_data(1:2*(obj.payload_per_symbol+32+6),:);
                     buf = vitdec(buf, obj.trellis, 35, "trunc", "hard");
+                    % buf = llr_data(1:2*(obj.payload_per_symbol+32+6),:);
+                    % buf = vitdec(buf, obj.trellis, 35, "trunc", "unquant");
+
+                    % buf = buf(obj.interleaver);
                     buf = buf(1:end-6, :);
                     [~,err] = crcDetect(buf,obj.crcCfg);
 
@@ -263,7 +320,7 @@ classdef DATA_Handler < handle
                 end
 
                 if ~(err&&options.crc)
-                    pilots = pskmod(zeros(obj.Npil, 1), 2);
+                    pilots = pskmod(zeros(obj.Npil, 1), 2)*obj.pilAmpl;
                     rx_mod_res_data = qammod(coded_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
                     
                     [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
@@ -272,10 +329,10 @@ classdef DATA_Handler < handle
                     
                     new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
                     obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
-                else
-                    obj.eqv = obj.eqv.*exp(-1i*sfo*t);
                 end
             end
+
+            obj.eqv = obj.eqv.*exp(-1i*sfo*t);
 
             eqv_pilots      = eqv_data(obj.eqv_pilotIdx, :);
             eqv_data        = eqv_data(obj.dataIdx, :);

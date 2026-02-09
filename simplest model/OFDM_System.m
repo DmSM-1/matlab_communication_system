@@ -9,11 +9,16 @@ classdef OFDM_System < handle
         Fc
         Fs
         crc
+
+        cfo_enable
+        sfp_enable
+        ltf_eqv_enable
         
         % Конфигурация и пути
         Config
         sdr_order
         OutputDir % Путь к папке результатов
+        graph_output
         
     end
 
@@ -39,18 +44,19 @@ classdef OFDM_System < handle
                 % --- STF Parameters ---
                 options.stf_Ppos = [] 
                 options.stf_margin1 (1,1) double = 1
-                options.stf_est_symb (1,1) double = 8
+                options.stf_est_symb (1,1) double = 20
                 options.stf_margin2 (1,1) double = 1
                 options.stf_mask_width (1,1) double = 30
-                options.stf_threshold (1,1) double = 7.0
+                options.stf_threshold (1,1) double = 1.0
                 
                 % --- LTF Parameters ---
-                options.ltf_Nsymb (1,1) double = 8
+                options.ltf_Nsymb (1,1) double = 12
                 options.ltf_sto_shift (1,1) int32 = 0
                 
                 % --- Data Parameters ---
                 options.Bw (1,1) double = 0.5
-                options.Npil (1,1) double = 8
+                options.Npil (1,1) double = 10
+                options.pilAmpl (1,1) double = 1
                 options.Ndat (1,1) double = 512
                 options.data_Nsymb (1,1) double = 2000
                 options.Mod_pow (1,1) double = 4
@@ -63,18 +69,25 @@ classdef OFDM_System < handle
 
                 options.sdr_order (1,1) int32 = 1
                 options.check_crc (1,1) logical = false
+                options.graph_output (1,1) logical = false
+
+                options.cfo_enable = true
+                options.sfo_enable = true
+                options.ltf_eqv_enable = true
             end
 
             obj.Fc = options.Fc;
             obj.Fs = options.Fs;
             obj.sdr_order = options.sdr_order;
             obj.crc = options.check_crc;
+            obj.cfo_enable = options.cfo_enable;
             
             % 1. Управление директорией (Overwrite / Create)
             obj.OutputDir = options.OutputDir;
+            obj.graph_output = options.graph_output;
+            obj.ltf_eqv_enable = options.ltf_eqv_enable;
             
             if ~exist(obj.OutputDir, 'dir')
-                % Если папки нет - создаем
                 mkdir(obj.OutputDir);
             end
             
@@ -125,6 +138,7 @@ classdef OFDM_System < handle
                 L        = options.L, ...
                 Bw       = options.Bw, ...
                 Npil     = options.Npil, ...
+                pilAmpl  = options.pilAmpl, ...
                 Ndat     = options.Ndat, ...
                 Nsymb    = options.data_Nsymb, ...
                 Mod_pow  = options.Mod_pow, ...
@@ -136,8 +150,6 @@ classdef OFDM_System < handle
                 debug    = options.debug ...
             );
             
-            % Если нужно сохранить ВЕСЬ объект после инициализации:
-            % save(fullfile(obj.OutputDir, 'system_obj.mat'), 'obj');
         end
 
         function [tx_waveform, coded_bits] = generate_frame(obj, seed)
@@ -158,12 +170,10 @@ classdef OFDM_System < handle
             data_wav = obj.data_handler.get_waveform(coded_bits);
             
             % ИЗВЛЕКАЕМ МОДУЛИРОВАННЫЕ СИМВОЛЫ (QAM)
-            % Это нужно для расчета EVM/RMSE без повторной модуляции
             tx_mod_symbols = obj.data_handler.mod_data;
             
             % Сборка полного кадра
             tx_waveform = [obj.stf.waveform; obj.ltf.waveform; data_wav];
-
 
             % --- 2. Логика файловой системы ---
             
@@ -200,8 +210,6 @@ classdef OFDM_System < handle
         
         function run_channel_on_dataset(obj)
             % RUN_CHANNEL_ON_DATASET Сканирует папку OutputDir, находит все
-            % подпапки с номерами (1, 2...), загружает оттуда tx_waveform,
-            % прогоняет через текущий канал и сохраняет rx_waveform.
 
             fprintf('--- Start Channel Simulation on Dataset ---\n');
             fprintf('Target Directory: %s\n', obj.OutputDir);
@@ -212,14 +220,9 @@ classdef OFDM_System < handle
             subDirs = files(dirFlags);
             folderNames = {subDirs.name};
             
-            % Убираем '.' и '..'
             folderNames = folderNames(~ismember(folderNames, {'.', '..'}));
-            
-            % Преобразуем в числа
             folderNums = str2double(folderNames);
             validNums = folderNums(~isnan(folderNums));
-            
-            % Сортируем, чтобы обрабатывать по порядку (1, 2, 3...)
             validNums = sort(validNums);
 
             if isempty(validNums)
@@ -231,7 +234,6 @@ classdef OFDM_System < handle
             fprintf('Found %d folders. Processing...\n', totalFolders);
 
             % 2. Цикл по всем найденным папкам
-            % Используем reverseStr для красивой анимации прогресса в консоли
             reverseStr = ''; 
 
             for i = 1:totalFolders
@@ -245,7 +247,6 @@ classdef OFDM_System < handle
                 % Проверяем наличие файла с данными передачи
                 if exist(txFile, 'file')
                     % Загружаем tx_waveform
-                    % load возвращает структуру, берем поле оттуда
                     loadedData = load(txFile, 'tx_waveform');
                     
                     if isfield(loadedData, 'tx_waveform')
@@ -272,26 +273,19 @@ classdef OFDM_System < handle
 
         function run_sdr_channel_on_dataset(obj)
             % RUN_CHANNEL_ON_DATASET Сканирует папку OutputDir, находит все
-            % подпапки с номерами (1, 2...), загружает оттуда tx_waveform,
-            % прогоняет через текущий канал и сохраняет rx_waveform.
 
             fprintf('--- Start SDR Channel on Dataset ---\n');
             fprintf('Target Directory: %s\n', obj.OutputDir);
 
-            % 1. Сканируем папку на наличие числовых подпапок
             files = dir(obj.OutputDir);
             dirFlags = [files.isdir];
             subDirs = files(dirFlags);
             folderNames = {subDirs.name};
             
-            % Убираем '.' и '..'
             folderNames = folderNames(~ismember(folderNames, {'.', '..'}));
-            
-            % Преобразуем в числа
             folderNums = str2double(folderNames);
             validNums = folderNums(~isnan(folderNums));
             
-            % Сортируем, чтобы обрабатывать по порядку (1, 2, 3...)
             validNums = sort(validNums);
 
             if isempty(validNums)
@@ -302,8 +296,6 @@ classdef OFDM_System < handle
             totalFolders = length(validNums);
             fprintf('Found %d folders. Processing...\n', totalFolders);
 
-            % 2. Цикл по всем найденным папкам
-            % Используем reverseStr для красивой анимации прогресса в консоли
             reverseStr = ''; 
 
             for i = 1:totalFolders
@@ -314,10 +306,7 @@ classdef OFDM_System < handle
                 txFile = fullfile(currentDir, 'tx_data.mat');
                 rxFile = fullfile(currentDir, 'rx_data.mat');
                 
-                % Проверяем наличие файла с данными передачи
                 if exist(txFile, 'file')
-                    % Загружаем tx_waveform
-                    % load возвращает структуру, берем поле оттуда
                     loadedData = load(txFile, 'tx_waveform');
                     adr = ['ip:192.168.4.1'; 'ip:192.168.3.1'];
 
@@ -414,18 +403,9 @@ classdef OFDM_System < handle
             t_start = tic;
 
             for i = 1:num_frames
-                % Формируем сообщение прогресса
                 msg = sprintf('Generating: %3d / %d', i, num_frames);
-                
-                % Печатаем (удаляя предыдущее сообщение)
                 fprintf([reverseStr, msg]);
-                
-                % Вызываем генерацию одного кадра
-                % Передаем 'i' в качестве seed, чтобы кадры были разными,
-                % но воспроизводимыми
                 obj.generate_frame();
-                
-                % Готовим строку удаления для следующего шага
                 reverseStr = repmat('\b', 1, length(msg));
             end
             
@@ -469,11 +449,13 @@ classdef OFDM_System < handle
             total_rmse = 0;
             valid_count = 0;
 
-            fig1 = figure(1);
-            fig2 = figure(2);
-            fig3 = figure(3);
-            fig4 = figure(4);
-            fig5 = figure(5);
+            if obj.graph_output
+                fig1 = figure(1);
+                fig2 = figure(2);
+                fig3 = figure(3);
+                fig4 = figure(4);
+                fig5 = figure(5);
+            end
 
             % 3. RECEIVER LOOP
             for i = 1:totalFrames
@@ -506,10 +488,25 @@ classdef OFDM_System < handle
                 end
                 
                 rx_frame = rx_waveform(stf_h.sto : min(length(rx_waveform), stf_h.sto + length(tx_struct.tx_waveform)));
-                rx_frame = rx_frame .* exp(-2i*pi * stf_h.cfo * (0 : length(rx_frame)-1).');
+
+                if obj.cfo_enable
+                    rx_frame = rx_frame .* exp(-2i*pi * stf_h.cfo * (0 : length(rx_frame)-1).');
+                end
                 
                 %LTF Estimation 
-                est = ltf_h.estimate(rx_frame);
+                sto = ltf_h.find_sto(rx_frame);
+
+                rx_data_wav = rx_frame(ltf_h.sto : end);
+                [cfo, sfo] = obj.data_handler.get_freq(rx_data_wav);
+
+                phase = 0;
+            
+                for j = 1:length(rx_frame)
+                    phase = phase + cfo;
+                    rx_frame(i) = rx_frame(j)*exp(-1i*phase);
+                end
+
+                est = ltf_h.estimate(rx_frame, sfo=sfo, beta=obj.data_handler.beta);
                 
                 if ~est
                      fprintf('| %4d | %15s | %8s | %8s | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
@@ -519,6 +516,10 @@ classdef OFDM_System < handle
                 %Data Processing
                 rx_data_wav = rx_frame(ltf_h.sto : end);
                 
+                if ~obj.ltf_eqv_enable
+                    ltf_h.eqv = complex(ones(size(ltf_h.eqv)));
+                end
+
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
                 [id_rx_eqv_data, id_rx_eqv_pilots, id_ifft_data, id_rx_res_data, decoded_id_res_data] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
@@ -560,150 +561,165 @@ classdef OFDM_System < handle
     
                     %SAVE RESULTS IN CVS
                     csvPath = fullfile(obj.OutputDir, 'statistics.csv');
+                    new_file = ~isfile(csvPath);
                     
                     fid = fopen(csvPath, 'a');
                     if fid ~= -1
-                        if valid_count == 1
-                            fprintf(fid, 'FolderID, SNR, MS_SNR,BER,FEC_BER,ID_BER,RMSE, ID_RMSE,\n');
+                        if valid_count == 1 & new_file
+                            fprintf(fid, 'FolderID, MOD_POW, SNR, MS_SNR, BER, FEC_BER, ID_BER, RMSE, ID_RMSE,\n');
                         end
-                        fprintf(fid, '%d,%f,%f,%f,%f,%f,%f,%f\n', folderIdx, obj.chan.SNR+snr_bb_gain, snr, ber, fec_ber, id_ber, rmse, id_rmse);
+
+                        fprintf(fid, ...
+                            '%d,%f,%f,%f,%f,%f,%f,%f,%f\n', ...
+                            folderIdx, ...
+                            obj.data_handler.Mod_pow, ...
+                            obj.chan.SNR, ...
+                            snr, ...
+                            ber, ...
+                            fec_ber, ...
+                            id_ber, ...
+                            rmse, ...
+                            id_rmse ...
+                        );
+
                         fclose(fid);
                     end
 
                 %PLOTS
-                %DUMP
-                set(0, 'CurrentFigure', fig1);
-                    clf;
-                    t = tiledlayout(fig1, 3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-    
-                    nexttile;
-                    plot(abs(rx_waveform));
-                    title("Signal amplitude");
-    
-                    nexttile;
-                    plot(obj.data_handler.ang);
-                    title("Pilot phase diviation");
-    
-                    nexttile;
-                    plot(abs(ltf_eqv));
-                    title("LTF AFC");
-                    nexttile;
-                    plot(unwrap(angle(ltf_eqv)));
-                    title("LTF PFC");
-    
-                    nexttile;
-                    plot(abs(obj.data_handler.eqv));
-                    title("Last symb AFC");
-                    nexttile;
-                    plot(unwrap(angle(obj.data_handler.eqv)));
-                    title("Last symb PFC");
-    
-                %SPECTROGRAM
-                set(0, 'CurrentFigure', fig2);
-                    clf;
-                    spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
-                    max_val = max(10*log10(abs(rx_waveform).^2));
-                    clim([max_val-50, max_val]);
-                    title(sprintf('Frame %d Spectrogram', folderIdx));
-                      
-                %IQ    
-                set(0, 'CurrentFigure', fig3);
-                    clf;
-                    t = tiledlayout(fig3, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                if obj.graph_output
+                    %DUMP
+                    set(0, 'CurrentFigure', fig1);
+                        clf;
+                        t = tiledlayout(fig1, 3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+        
+                        nexttile;
+                        plot(abs(rx_waveform));
+                        title("Signal amplitude");
+        
+                        nexttile;
+                        plot(obj.data_handler.ang);
+                        title("Pilot phase diviation");
+        
+                        nexttile;
+                        plot(abs(ltf_eqv));
+                        title("LTF AFC");
+                        nexttile;
+                        plot(unwrap(angle(ltf_eqv)));
+                        title("LTF PFC");
+        
+                        nexttile;
+                        plot(abs(obj.data_handler.eqv));
+                        title("Last symb AFC");
+                        nexttile;
+                        plot(unwrap(angle(obj.data_handler.eqv)));
+                        title("Last symb PFC");
+        
+                    %SPECTROGRAM
+                    set(0, 'CurrentFigure', fig2);
+                        clf;
+                        spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
+                        max_val = max(10*log10(abs(rx_waveform).^2));
+                        clim([max_val-50, max_val]);
+                        title(sprintf('Frame %d Spectrogram', folderIdx));
+                          
+                    %IQ    
+                    set(0, 'CurrentFigure', fig3);
+                        clf;
+                        t = tiledlayout(fig3, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                        
+                        ifft_data_plot = ifft_data ./ sqrt(mean(abs(ifft_data.^2), 'all'));
+                        
+                        nexttile;
+                        scatter(real(ifft_data_plot(:)), imag(ifft_data_plot(:)), 3, 'blue', '.');
+                        hold on;
+                        scatter(real(rx_eqv_data(:)), imag(rx_eqv_data(:)), 3, 'red', '.');
+                        scatter(real(rx_eqv_pilots(:)), imag(rx_eqv_pilots(:)), 7, 'green', '.');
+                        hold off;
+                        
+                        xlim([-2, 2]);
+                        ylim([-2, 2]);
+                        axis("square");
+                        grid on;
+                        title(sprintf('Constellation (BER: %.1e)', ber));
+        
+                        id_ifft_data_plot = id_ifft_data ./ sqrt(mean(abs(id_ifft_data.^2), 'all'));
+        
+                        nexttile;
+                        scatter(real(id_ifft_data_plot(:)), imag(id_ifft_data_plot(:)), 3, 'blue', '.');
+                        hold on;
+                        scatter(real(id_rx_eqv_data(:)), imag(id_rx_eqv_data(:)), 3, 'red', '.');
+                        scatter(real(id_rx_eqv_pilots(:)), imag(id_rx_eqv_pilots(:)), 7, 'green', '.');
+                        hold off;
+                        
+                        xlim([-2, 2]);
+                        ylim([-2, 2]);
+                        axis("square");
+                        grid on;
+                        title(sprintf('Constellation (id)'));
                     
-                    ifft_data_plot = ifft_data ./ sqrt(mean(abs(ifft_data.^2), 'all'));
-                    
-                    nexttile;
-                    scatter(real(ifft_data_plot(:)), imag(ifft_data_plot(:)), 3, 'blue', '.');
-                    hold on;
-                    scatter(real(rx_eqv_data(:)), imag(rx_eqv_data(:)), 3, 'red', '.');
-                    scatter(real(rx_eqv_pilots(:)), imag(rx_eqv_pilots(:)), 7, 'green', '.');
-                    hold off;
-                    
-                    xlim([-2, 2]);
-                    ylim([-2, 2]);
-                    axis("square");
-                    grid on;
-                    title(sprintf('Constellation (BER: %.1e)', ber));
+                    %ABS ERROR
+                    set(0, 'CurrentFigure', fig4);
+                        clf;
     
-                    id_ifft_data_plot = id_ifft_data ./ sqrt(mean(abs(id_ifft_data.^2), 'all'));
+                        if isappdata(fig4, 'graphics_linkprop1')
+                            rmappdata(fig4, 'graphics_linkprop1'); 
+                        end
+                        if isappdata(fig4, 'graphics_linkprop2')
+                            rmappdata(fig4, 'graphics_linkprop2')
+                        end
     
-                    nexttile;
-                    scatter(real(id_ifft_data_plot(:)), imag(id_ifft_data_plot(:)), 3, 'blue', '.');
-                    hold on;
-                    scatter(real(id_rx_eqv_data(:)), imag(id_rx_eqv_data(:)), 3, 'red', '.');
-                    scatter(real(id_rx_eqv_pilots(:)), imag(id_rx_eqv_pilots(:)), 7, 'green', '.');
-                    hold off;
-                    
-                    xlim([-2, 2]);
-                    ylim([-2, 2]);
-                    axis("square");
-                    grid on;
-                    title(sprintf('Constellation (id)'));
-                
-                %ABS ERROR
-                set(0, 'CurrentFigure', fig4);
-                    clf;
-
-                    if isappdata(fig4, 'graphics_linkprop1')
-                        rmappdata(fig4, 'graphics_linkprop1'); 
-                    end
-                    if isappdata(fig4, 'graphics_linkprop2')
-                        rmappdata(fig4, 'graphics_linkprop2')
-                    end
-
-                    t = tiledlayout(fig4, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                        t = tiledlayout(fig4, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+        
+                        ax1 = nexttile;
+                        mesh(ax1, abs_err);
+                        title(ax1, sprintf('Frame %d RMSE', folderIdx));
+                        colormap(ax1, 'jet');    
+                        axis(ax1, 'xy');            
+                        xlabel(ax1, 'Time / Index');
+                        ylabel(ax1, 'Frequency / Range');
+                        zlim(ax1, [0, 1]);
+                        clim(ax1, [0, 1]);
+                        
+                        ax2 = nexttile;
+                        mesh(ax2, id_abs_err);
+                        title(ax2, sprintf('Frame %d RMSE (id)', folderIdx));
+                        colormap(ax2, 'jet');    
+                        axis(ax2, 'xy');            
+                        xlabel(ax2, 'Time / Index');
+                        ylabel(ax2, 'Frequency / Range');
+                        zlim(ax2, [0, 1]);
+                        clim(ax2, [0, 1]);
+                        
+                        hLink1 = linkprop([ax1, ax2], {'CameraPosition', 'CameraUpVector', 'CameraViewAngle'});
+                        hLink2 = linkprop([ax1, ax2], {'XLim', 'YLim', 'ZLim'});
+                        
+                        setappdata(fig4, 'graphics_linkprop1', hLink1);
+                        setappdata(fig4, 'graphics_linkprop2', hLink2);
     
-                    ax1 = nexttile;
-                    mesh(ax1, abs_err);
-                    title(ax1, sprintf('Frame %d RMSE', folderIdx));
-                    colormap(ax1, 'jet');    
-                    axis(ax1, 'xy');            
-                    xlabel(ax1, 'Time / Index');
-                    ylabel(ax1, 'Frequency / Range');
-                    zlim(ax1, [0, 1]);
-                    clim(ax1, [0, 1]);
-                    
-                    ax2 = nexttile;
-                    mesh(ax2, id_abs_err);
-                    title(ax2, sprintf('Frame %d RMSE (id)', folderIdx));
-                    colormap(ax2, 'jet');    
-                    axis(ax2, 'xy');            
-                    xlabel(ax2, 'Time / Index');
-                    ylabel(ax2, 'Frequency / Range');
-                    zlim(ax2, [0, 1]);
-                    clim(ax2, [0, 1]);
-                    
-                    hLink1 = linkprop([ax1, ax2], {'CameraPosition', 'CameraUpVector', 'CameraViewAngle'});
-                    hLink2 = linkprop([ax1, ax2], {'XLim', 'YLim', 'ZLim'});
-                    
-                    setappdata(fig4, 'graphics_linkprop1', hLink1);
-                    setappdata(fig4, 'graphics_linkprop2', hLink2);
-
-                %BIT ERROR
-                set(0, 'CurrentFigure', fig5);
-                    clf();
-                    t = tiledlayout(fig5, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                    %BIT ERROR
+                    set(0, 'CurrentFigure', fig5);
+                        clf();
+                        t = tiledlayout(fig5, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+        
+                        ax1 = nexttile;
+                        imagesc(ax1, err);
+                        title(ax1, sprintf('Frame %d BER', folderIdx));
+                        colormap(ax1, 'gray');    
+                        axis(ax1, 'xy');            
+                        xlabel(ax1, 'Time / Index');
+                        
+                        ax2 = nexttile;
+                        imagesc(ax2, fec_err);
+                        title(ax2, sprintf('Frame %d FEC BER', folderIdx));
+                        colormap(ax2, 'gray');    
+                        axis(ax2, 'xy');            
+                        xlabel(ax2, 'Time / Index');
+                        ylabel(ax2, 'Frequency / Range');
     
-                    ax1 = nexttile;
-                    imagesc(ax1, err);
-                    title(ax1, sprintf('Frame %d BER', folderIdx));
-                    colormap(ax1, 'gray');    
-                    axis(ax1, 'xy');            
-                    xlabel(ax1, 'Time / Index');
-                    
-                    ax2 = nexttile;
-                    imagesc(ax2, fec_err);
-                    title(ax2, sprintf('Frame %d FEC BER', folderIdx));
-                    colormap(ax2, 'gray');    
-                    axis(ax2, 'xy');            
-                    xlabel(ax2, 'Time / Index');
-                    ylabel(ax2, 'Frequency / Range');
-
-                % SAVE PLOTS
-                plotPath = fullfile(currentDir, 'analysis_plot.png');
-                exportgraphics(fig3, plotPath, 'Resolution', 300);
-
+                    % SAVE PLOTS
+                    plotPath = fullfile(currentDir, 'analysis_plot.png');
+                    exportgraphics(fig3, plotPath, 'Resolution', 300);
+                end
             end
             
             if valid_count > 0

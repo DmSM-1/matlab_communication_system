@@ -4,6 +4,7 @@ classdef Channel
         tgnChannel
         SNR
         cfo_shifter
+        cfo
         p_noise
         max_random_sto
         awgn_only
@@ -40,6 +41,7 @@ classdef Channel
                 obj.tgnChannel = tgnChannel;
             end
 
+            obj.cfo = options.CFO;
             obj.cfo_shifter = comm.PhaseFrequencyOffset(...
                 'FrequencyOffset', options.CFO, ...
                 'SampleRate', options.Fs);
@@ -56,7 +58,6 @@ classdef Channel
 
         function rx_waveform = tx(obj, tx_waveform)
 
-
             if obj.max_random_sto > 0 
                 waveform = [
                     zeros(100,1); 
@@ -66,18 +67,21 @@ classdef Channel
                 ];
             else
                 waveform = [
-                    zeros(1000,1); 
+                    zeros(100,1); 
                     tx_waveform; 
-                    zeros(1000,1)
+                    zeros(100,1)
                 ];
             end
             
             if ~obj.awgn_only
                 waveform = obj.tgnChannel(waveform);
-                waveform = obj.cfo_shifter(waveform);
+
+                if obj.cfo
+                    waveform = obj.cfo_shifter(waveform);
+                end
             end
             % waveform = obj.p_noise(waveform);
-            waveform = awgn(waveform,obj.SNR,'measured');
+            waveform = awgn(waveform,obj.SNR);
             rx_waveform = waveform;
         end
 
