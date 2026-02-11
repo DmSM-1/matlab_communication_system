@@ -70,7 +70,7 @@ classdef STF_Handler < handle
                     fprintf("Symb:%4d Stage %d SNR(dB) %3.3f \n", i, obj.stage, SNR); 
                 end
 
-                if SNR < obj.stf.det_threshold %&& obj.stage ~= 4
+                if SNR < obj.stf.det_threshold && obj.detected < obj.stf.threshould_symb %&& obj.stage ~= 4
                     obj.detected = 0;
                     obj.stage = 0;
                     continue;

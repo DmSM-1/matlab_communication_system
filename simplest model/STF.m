@@ -16,6 +16,7 @@ classdef STF
         waveform    % preamble
         det_mask
         det_threshold
+        threshould_symb
         period 
     end
 
@@ -28,6 +29,7 @@ classdef STF
                 options.margin1 = 0
                 options.est_symb = 1
                 options.margin2 = 0
+                options.threshould_symb = 1
                 options.det_mask_width = 5
                 options.det_threshold = 1.0
             end
@@ -41,6 +43,7 @@ classdef STF
             obj.est_symb = options.est_symb;
             obj.margin2 = options.margin2;
             obj.period = obj.L;
+            obj.threshould_symb = options.threshould_symb;
             
             waveform = complex(zeros(N, obj.Nsymb));
             

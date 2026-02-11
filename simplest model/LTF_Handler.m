@@ -78,18 +78,15 @@ classdef LTF_Handler < handle
             buf = waveform(max_index+2*obj.ltf.N:max_index+(obj.ltf.Nsymb-2)*obj.ltf.N-1);
             buf = reshape(buf, [], obj.ltf.Nsymb/2-2);
 
+
             obj.H = fft(buf)./fft(obj.ltf.ref);
-            options.sfo = options.sfo*(2*obj.ltf.N)/(obj.ltf.L+obj.ltf.N);
-            t = options.sfo*(1:2*obj.ltf.N)';
+            t = exp(1i*options.sfo*(0 : 2*obj.ltf.N-1).');
 
             for i = 2:obj.ltf.Nsymb/2-2
-                obj.H(:, i) = options.beta*obj.H(:, i) + (1-options.beta)*obj.H(:, i-1); %.*exp(-1i*t);
+                obj.H(:, i) = options.beta*obj.H(:, i)+(1-options.beta)*obj.H(:, i-1).*t;
             end
-            obj.H = obj.H(:,end);
 
-            % buf = mean(buf,2);
-
-            % obj.H = fft(buf)./fft(obj.ltf.ref);
+            obj.H = obj.H(:,obj.ltf.Nsymb/2-2);
             obj.h = ifft(obj.H);
 
             [max_val, ~] = max(abs(obj.h));

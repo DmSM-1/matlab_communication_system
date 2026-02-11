@@ -47,7 +47,7 @@ classdef OFDM_System < handle
                 options.stf_est_symb (1,1) double = 20
                 options.stf_margin2 (1,1) double = 1
                 options.stf_mask_width (1,1) double = 30
-                options.stf_threshold (1,1) double = 1.0
+                options.stf_threshold (1,1) double = 7.0
                 
                 % --- LTF Parameters ---
                 options.ltf_Nsymb (1,1) double = 12
@@ -66,6 +66,8 @@ classdef OFDM_System < handle
                 options.debug (1,1) logical = true
                 options.guards = []
                 options.DC_guard (1,1) int32 = 1
+                options.win_slope (1,1) double = 0
+                options.soft (1,1) logical = 0
 
                 options.sdr_order (1,1) int32 = 1
                 options.check_crc (1,1) logical = false
@@ -147,7 +149,9 @@ classdef OFDM_System < handle
                 beta     = options.beta, ...
                 guards   = options.guards, ...
                 DC_guard = options.DC_guard, ...
-                debug    = options.debug ...
+                win_slope= options.win_slope, ...
+                soft     = options.soft, ...
+                debug    = options.debug   ...
             );
             
         end
@@ -521,9 +525,9 @@ classdef OFDM_System < handle
                 end
 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [id_rx_eqv_data, id_rx_eqv_pilots, id_ifft_data, id_rx_res_data, decoded_id_res_data] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits);
+                [id_rx_eqv_data, id_rx_eqv_pilots, id_ifft_data, id_rx_res_data, decoded_id_res_data] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits, snr=stf_h.snr);
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [rx_eqv_data, rx_eqv_pilots, ifft_data, rx_res_data, decoded_res_data] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc);
+                [rx_eqv_data, rx_eqv_pilots, ifft_data, rx_res_data, decoded_res_data] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc, snr=stf_h.snr);
                 
                 % ERRORS 
                 err         = xor(rx_res_data(:), tx_struct.coded_bits(:));
@@ -590,7 +594,7 @@ classdef OFDM_System < handle
                     %DUMP
                     set(0, 'CurrentFigure', fig1);
                         clf;
-                        t = tiledlayout(fig1, 3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                        t = tiledlayout(fig1, 4, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
         
                         nexttile;
                         plot(abs(rx_waveform));
@@ -613,6 +617,9 @@ classdef OFDM_System < handle
                         nexttile;
                         plot(unwrap(angle(obj.data_handler.eqv)));
                         title("Last symb PFC");
+                        nexttile;
+                        plot(obj.data_handler.std_eqv_err);
+                        title("STD error of AFC");
         
                     %SPECTROGRAM
                     set(0, 'CurrentFigure', fig2);
