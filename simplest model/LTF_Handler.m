@@ -83,7 +83,7 @@ classdef LTF_Handler < handle
             t = exp(1i*options.sfo*(0 : 2*obj.ltf.N-1).');
 
             for i = 2:obj.ltf.Nsymb/2-2
-                obj.H(:, i) = options.beta*obj.H(:, i)+(1-options.beta)*obj.H(:, i-1).*t;
+                obj.H(:, i) = options.beta*obj.H(:, i)+(1-options.beta)*obj.H(:, i-1);%.*t;
             end
 
             obj.H = obj.H(:,obj.ltf.Nsymb/2-2);
@@ -91,7 +91,7 @@ classdef LTF_Handler < handle
 
             [max_val, ~] = max(abs(obj.h));
             
-            obj.h(obj.h_window/2+1:end-obj.h_window) = 0;
+            obj.h(obj.h_window/2+1:end-obj.h_window/2) = 0;
 
             obj.h = circshift(obj.h, -obj.ltf.sto_shift);
             obj.H = fft(obj.h);

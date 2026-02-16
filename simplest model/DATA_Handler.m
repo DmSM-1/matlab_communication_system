@@ -240,12 +240,10 @@ classdef DATA_Handler < handle
                 eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
                 
                 pilot_eqv = eqv_data(obj.eqv_pilotIdx, i)./obj.pilAmpl;
-                
-                pilot_eqv = interp1(obj.eqv_pilotIdx, abs(pilot_eqv), indices, 'linear', 'extrap') .* ...
-                            exp(1i*interp1(obj.eqv_pilotIdx, unwrap(angle(pilot_eqv)), indices, 'linear', 'extrap'));
-                pilot_eqv = (1-obj.alpha)*ones(size(pilot_eqv))+obj.alpha*pilot_eqv;
-                pilot_eqv = conj(pilot_eqv)./(abs(pilot_eqv.^2)+1e-3);
-                
+
+                p = polyfit(obj.eqv_pilotIdx, unwrap(angle(pilot_eqv)), 1);
+                pilot_eqv = exp(-1i*polyval(p , indices));
+
                 eqv_data(:, i) = eqv_data(:, i).*pilot_eqv;
                 
                 eqv_pilots = eqv_data(obj.eqv_pilotIdx, i)./obj.pilAmpl;
@@ -258,7 +256,7 @@ classdef DATA_Handler < handle
                 
                     [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
                     new_H = ifft_data(:, i)./rx_demod_res_data;
-                
+                                 
                     new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
                     obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
                     val = polyfit(obj.eqv_pilotIdx, angle(conj(obj.eqv(obj.eqv_pilotIdx))), 1);
@@ -267,17 +265,18 @@ classdef DATA_Handler < handle
                 end
                 snr_per_sc = options.snr + 10*log10((obj.Ndat + obj.Npil) / obj.N);
                 noise_var = 10^(-snr_per_sc / 10);
+                llr = [];
                 if obj.Cod_rate ~= 1
                     
                     buf = [];
                     err = 0;
                     if obj.soft
-                        coded_data = qamdemod( ...
+                        llr = qamdemod( ...
                             coded_data, 2^obj.Mod_pow, 'gray', ...
                             'OutputType', 'approxllr', ...
                             'UnitAveragePower', true, ...
                             'NoiseVariance', noise_var);
-                        coded_data = reshape(coded_data, [], 1);
+                        coded_data = reshape(llr, [], 1);
                         
                         buf = coded_data(1:2*(obj.payload_per_symbol+32+6),:);
                         buf = obj.decoder(buf);
@@ -312,9 +311,10 @@ classdef DATA_Handler < handle
                     [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
     
                     new_H = ifft_data(:, i)./rx_demod_res_data/obj.N*sqrt(length(obj.activeIdx));
-                    
                     new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
+                    
                     obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
+
                 end
                 obj.eqv = obj.eqv.*exp(-1i*sfo*t);
                 obj.std_eqv_err(i) = std(abs(obj.eqv(obj.dataIdx))-1);

@@ -131,7 +131,8 @@ classdef OFDM_System < handle
             obj.ltf = LTF( ...
                 options.N, options.L, ...
                 Nsymb = options.ltf_Nsymb, ...
-                sto_shift=options.ltf_sto_shift ...
+                sto_shift=options.ltf_sto_shift, ...
+                bw=options.Bw ...
             );
 
             
@@ -507,7 +508,7 @@ classdef OFDM_System < handle
             
                 for j = 1:length(rx_frame)
                     phase = phase + cfo;
-                    rx_frame(i) = rx_frame(j)*exp(-1i*phase);
+                    rx_frame(j) = rx_frame(j)*exp(-1i*phase);
                 end
 
                 est = ltf_h.estimate(rx_frame, sfo=sfo, beta=obj.data_handler.beta);
@@ -612,14 +613,18 @@ classdef OFDM_System < handle
                         title("LTF PFC");
         
                         nexttile;
-                        plot(abs(obj.data_handler.eqv));
+                        plot(abs(obj.data_handler.eqv(obj.data_handler.activeIdx)));
                         title("Last symb AFC");
                         nexttile;
                         plot(unwrap(angle(obj.data_handler.eqv)));
                         title("Last symb PFC");
+
                         nexttile;
                         plot(obj.data_handler.std_eqv_err);
                         title("STD error of AFC");
+                        nexttile;
+                        plot(abs(ltf_h.h));
+                        title("channel intensity profile");
         
                     %SPECTROGRAM
                     set(0, 'CurrentFigure', fig2);

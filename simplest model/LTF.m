@@ -4,6 +4,7 @@ classdef LTF
     properties
         N
         L
+        bw
         symb_len
         Nsymb
         waveform
@@ -18,10 +19,12 @@ classdef LTF
                 L 
                 options.Nsymb = 4
                 options.sto_shift = 0
+                options.bw = 1.0
             end
             
             obj.N = N;
             obj.L = L;
+            obj.bw = options.bw;
             obj.symb_len = N+L;
             obj.Nsymb = options.Nsymb;
             obj.waveform = complex(zeros(obj.Nsymb*obj.symb_len, 1));
@@ -34,8 +37,10 @@ classdef LTF
             sample = 0;
 
             for i = 1:length(obj.waveform)
+
                 obj.waveform(i) = exp(1i*pi*sample^2/(2*N)); %2T
                 sample = sample+1;
+
                 if sample == 2*N
                     sample = 0;
                 end

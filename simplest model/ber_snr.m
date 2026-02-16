@@ -4,8 +4,8 @@ clc;
 
 dataset_path = "test";
 
-snrs = 23:-3:0;
-runs = 10;
+snrs = 23:-3:5;
+runs = 3;
 k = 6;
 bw = 1.0;
 
@@ -80,6 +80,7 @@ sim = OFDM_System( ...
         ltf_eqv_enable  = 1, ...
         soft            = 1 ...
     );
+
 bw = (sim.data_handler.ofdm.Ndat+sim.data_handler.ofdm.Npil)/sim.data_handler.ofdm.N;
 
 filename = dataset_path+'/statistics.csv';

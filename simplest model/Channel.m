@@ -14,7 +14,7 @@ classdef Channel
         function obj = Channel(options)
             arguments
                 options.Model = 'Model-A'
-                options.dist = 10
+                options.dist = 100
                 options.Fc = 2.4e9 
                 options.Fs = 20e6 
                 options.SNR = 100
