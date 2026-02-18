@@ -311,9 +311,37 @@ classdef DATA_Handler < handle
                     [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
     
                     new_H = ifft_data(:, i)./rx_demod_res_data/obj.N*sqrt(length(obj.activeIdx));
-                    new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
                     
+
+                    % Accorgin Paper
+                    Y = ifft_data(:, i) ./ obj.N .* sqrt(length(obj.activeIdx));
+                    X = rx_demod_res_data;
+                    dX  = abs(eqv_data(:, i)-X);
+                    ndX = dX./abs(X);
+
+                    rel_indexes = intersect(obj.activeIdx,find(ndX<2^(-obj.Mod_pow/2)));
+                    Xrp = X(rel_indexes);
+                    Yrp = Y(rel_indexes);
+
+                    fft_indexes = mod((obj.ofdm.left_guard:obj.ofdm.right_guard)-obj.N/2, obj.N);
+                    fft_indexes(fft_indexes==0) = obj.N; 
+                    
+                    F   = dftmtx(obj.N);
+                    F   = F(:, 1:obj.L);
+                    
+                    Frp = F(fft_indexes(rel_indexes), :);          
+                    Arp = diag(Xrp) * Frp;
+                    h_rp = (Arp'*Arp+1e-6*eye(obj.L)) \ (Arp' * Yrp);
+                    H_rp = F(fft_indexes, :) * h_rp; 
+
+                    new_eqv = conj(H_rp)./(abs(H_rp)+1e-3);
+                    % new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
+
                     obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
+                    
+                    % obj.eqv(obj.dataIdx) = obj.eqv(obj.dataIdx) + obj.beta*(new_eqv(obj.dataIdx)-obj.eqv(obj.dataIdx));
+                    % obj.eqv(obj.eqv_pilotIdx) = obj.eqv(obj.eqv_pilotIdx) + obj.beta*(new_eqv(obj.eqv_pilotIdx)-obj.eqv(obj.eqv_pilotIdx));
+
 
                 end
                 obj.eqv = obj.eqv.*exp(-1i*sfo*t);
