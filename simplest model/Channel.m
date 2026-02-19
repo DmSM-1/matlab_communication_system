@@ -8,6 +8,8 @@ classdef Channel
         p_noise
         max_random_sto
         awgn_only
+        rndStream
+        seed
     end
 
     methods
@@ -23,7 +25,12 @@ classdef Channel
                 options.PhaseNoiseFreq  = [100 1000 10000]
                 options.max_random_sto = 1
                 options.awgn_only = false
+
+                options.Seed = 0
             end
+
+            obj.rndStream = RandStream('mt19937ar', 'Seed', options.Seed);
+            obj.seed = options.Seed;
 
             if options.Model == "awgn"
                 options.awgn_only = true;
@@ -37,6 +44,9 @@ classdef Channel
                 tgnChannel.NormalizeChannelOutputs  = false;
                 tgnChannel.CarrierFrequency         = options.Fc;
                 tgnChannel.SampleRate               = options.Fs;  
+
+                tgnChannel.RandomStream = 'mt19937ar with seed';
+                tgnChannel.Seed = options.Seed;
     
                 obj.tgnChannel = tgnChannel;
             end
@@ -57,11 +67,12 @@ classdef Channel
         end
 
         function rx_waveform = tx(obj, tx_waveform)
-
+            
+            reset(obj.rndStream);
             if obj.max_random_sto > 0 
                 waveform = [
                     zeros(100,1); 
-                    zeros(randi(obj.max_random_sto), 1); 
+                    zeros(randi(obj.rndStream, obj.max_random_sto), 1); 
                     tx_waveform; 
                     zeros(100,1)
                 ];
@@ -74,6 +85,7 @@ classdef Channel
             end
             
             if ~obj.awgn_only
+                reset(obj.tgnChannel);
                 waveform = obj.tgnChannel(waveform);
 
                 if obj.cfo
@@ -81,7 +93,13 @@ classdef Channel
                 end
             end
             % waveform = obj.p_noise(waveform);
-            waveform = awgn(waveform,obj.SNR);
+            if obj.seed>0
+                reset(obj.rndStream);
+                waveform = awgn(waveform, obj.SNR, 0, obj.rndStream);
+            else
+                waveform = awgn(waveform, obj.SNR);
+            end
+            
             rx_waveform = waveform;
         end
 

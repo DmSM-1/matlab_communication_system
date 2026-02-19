@@ -68,6 +68,8 @@ classdef OFDM_System < handle
                 options.DC_guard (1,1) int32 = 1
                 options.win_slope (1,1) double = 0
                 options.soft (1,1) logical = 0
+                options.est_method string = "simple"
+
 
                 options.sdr_order (1,1) int32 = 1
                 options.check_crc (1,1) logical = false
@@ -152,6 +154,7 @@ classdef OFDM_System < handle
                 DC_guard = options.DC_guard, ...
                 win_slope= options.win_slope, ...
                 soft     = options.soft, ...
+                est_meth = options.est_method, ...
                 debug    = options.debug   ...
             );
             
@@ -368,10 +371,11 @@ classdef OFDM_System < handle
         end
 
 
-        function generate_dataset(obj, num_frames)
+        function generate_dataset(obj, num_frames, options)
             arguments
                 obj
                 num_frames (1,1) double {mustBePositive, mustBeInteger}
+                options.seed = []
             end
 
             % Удаляем только папки с именами "1", "2", "100" и т.д.
@@ -410,7 +414,11 @@ classdef OFDM_System < handle
             for i = 1:num_frames
                 msg = sprintf('Generating: %3d / %d', i, num_frames);
                 fprintf([reverseStr, msg]);
-                obj.generate_frame();
+                if ~isempty(options.seed)
+                    obj.generate_frame(options.seed(mod(i-1, length(options.seed))+1));
+                else
+                    obj.generate_frame(i);
+                end
                 reverseStr = repmat('\b', 1, length(msg));
             end
             
@@ -595,7 +603,7 @@ classdef OFDM_System < handle
                     %DUMP
                     set(0, 'CurrentFigure', fig1);
                         clf;
-                        t = tiledlayout(fig1, 4, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                        t = tiledlayout(fig1, 5, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
         
                         nexttile;
                         plot(abs(rx_waveform));
@@ -625,6 +633,13 @@ classdef OFDM_System < handle
                         nexttile;
                         plot(abs(ltf_h.h));
                         title("channel intensity profile");
+
+                        nexttile;
+                        plot(ltf_h.noise.*sqrt(obj.data_handler.ofdm.Bw));
+                        title("DISP FREQ PROFILE LTF");
+                        nexttile;
+                        plot(obj.data_handler.noise);
+                        title("DISP FREQ PROFILE DATA");
         
                     %SPECTROGRAM
                     set(0, 'CurrentFigure', fig2);

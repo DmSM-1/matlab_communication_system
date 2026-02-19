@@ -23,6 +23,7 @@ classdef DATA_Handler < handle
         ang
         
         eqv
+        noise
         debug
         eqv_pilotIdx
         dataIdx
@@ -38,6 +39,7 @@ classdef DATA_Handler < handle
         window
         soft
         std_eqv_err
+        est_method
     end
     methods
         function obj = DATA_Handler(options)
@@ -58,6 +60,7 @@ classdef DATA_Handler < handle
                 options.win_slope = 0;
                 options.soft = 1;
                 options.debug = false;
+                options.est_meth = "simple";
             end
             obj.N = options.N;
             obj.L = options.L;
@@ -66,6 +69,7 @@ classdef DATA_Handler < handle
             obj.Nsymb = options.Nsymb;
             obj.soft = options.soft;
             obj.trellis = poly2trellis(7, [171, 133], 171);
+            obj.est_method = options.est_meth;
             
             obj.ofdm = OFDM( ...
                 N=obj.N, ...
@@ -81,14 +85,10 @@ classdef DATA_Handler < handle
             obj.payload_per_symbol = floor(obj.Ndat*obj.Cod_rate*obj.Mod_pow)-32-6*(obj.Cod_rate~=1);
             obj.payload_per_symbol = obj.payload_per_symbol - mod(obj.payload_per_symbol, obj.Mod_pow);
             obj.payload = obj.Nsymb*obj.payload_per_symbol;
-            % sp = int32(floor(sqrt(2*(obj.payload_per_symbol+32+6))));
-            % obj.interleaver = reshape(1:sp^2, sp, sp);
-            % obj.interleaver = obj.interleaver.';
-            % obj.interleaver = [obj.interleaver(:); (sp^2+1:2*(obj.payload_per_symbol+32+6)).'];
-            % obj.interleaver = (1:obj.payload_per_symbol+32).';
             obj.data = [];
             obj.mod_data = [];
             obj.waveform = [];
+            obj.noise = [];
             obj.ang = zeros(obj.Nsymb, 1);
             obj.std_eqv_err = zeros(obj.Nsymb, 1);
             obj.eqv = complex(ones(obj.N, 1));
@@ -169,6 +169,12 @@ classdef DATA_Handler < handle
             obj.eqv = fftshift(obj.eqv);
             obj.eqv = obj.eqv(obj.ofdm.left_guard:obj.ofdm.right_guard);
             eqv = obj.eqv;
+
+            obj.noise = ltf_handler.noise;
+            obj.noise = fftshift(obj.noise);
+            obj.noise = obj.noise(obj.ofdm.left_guard:obj.ofdm.right_guard);
+            obj.noise = obj.noise.*sqrt(obj.ofdm.Bw);
+
         end
         function [cfo, sfo] = get_freq(obj, waveform)
             mod_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
@@ -290,7 +296,6 @@ classdef DATA_Handler < handle
 
                     buf = buf(1:end-6, :);
                     [~,err] = crcDetect(buf,obj.crcCfg);
-                    % buf = buf(obj.interleaver);
 
                     if ~err
                         decoded_data(:,i) = buf(1:end-32, :);
@@ -310,40 +315,70 @@ classdef DATA_Handler < handle
                     
                     [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
     
-                    new_H = ifft_data(:, i)./rx_demod_res_data/obj.N*sqrt(length(obj.activeIdx));
-                    
-
-                    % Accorgin Paper
                     Y = ifft_data(:, i) ./ obj.N .* sqrt(length(obj.activeIdx));
                     X = rx_demod_res_data;
-                    dX  = abs(eqv_data(:, i)-X);
-                    ndX = dX./abs(X);
 
-                    rel_indexes = intersect(obj.activeIdx,find(ndX<2^(-obj.Mod_pow/2)));
-                    Xrp = X(rel_indexes);
-                    Yrp = Y(rel_indexes);
+                    dX  = eqv_data(:, i)-X;
+                    obj.noise = sqrt((1-obj.beta)*obj.noise.^2 + obj.beta*abs(dX).^2);
+                    new_H = Y./X;
 
-                    fft_indexes = mod((obj.ofdm.left_guard:obj.ofdm.right_guard)-obj.N/2, obj.N);
-                    fft_indexes(fft_indexes==0) = obj.N; 
-                    
-                    F   = dftmtx(obj.N);
-                    F   = F(:, 1:obj.L);
-                    
-                    Frp = F(fft_indexes(rel_indexes), :);          
-                    Arp = diag(Xrp) * Frp;
-                    h_rp = (Arp'*Arp+1e-6*eye(obj.L)) \ (Arp' * Yrp);
-                    H_rp = F(fft_indexes, :) * h_rp; 
+                    if obj.est_method == "simple"
+                        new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
+                    else
+                        sigma_z2 = mean(abs(dX).^2);
+                        sigma_d2 = sigma_z2.*abs(obj.eqv).^2;
+                        sigma_d2 = sigma_d2(obj.dataIdx);
+                        
+                        
+                        dX  = abs(dX);
+                        ndX = dX./abs(X);
 
-                    new_eqv = conj(H_rp)./(abs(H_rp)+1e-3);
-                    % new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
+                        constel = qammod(0:2^obj.Mod_pow-1, 2^obj.Mod_pow, 'gray', 'UnitAveragePower', true).';
+                        dist2 = abs(eqv_data(obj.dataIdx, i) - constel.').^2;
+
+                        Pd = 1./pi./sigma_d2.*exp(-dX(obj.dataIdx).^2./sigma_d2);
+                        Pd_all = (1./(pi*sigma_d2)) .* exp(-dist2 ./ sigma_d2);
+                        Pd_others = sum(Pd_all, 2) - Pd;
+
+                        R = log(max(Pd./Pd_others, 1e-6));
+
+                        % rel_indexes = sort([obj.dataIdx; obj.eqv_pilotIdx]);
+                        % rel_indexes = intersect(obj.activeIdx,find(ndX<2^(-obj.Mod_pow/2+1)));
+                        rel_indexes = sort([obj.dataIdx(find(R>-2)); obj.eqv_pilotIdx]);
+
+                        Rz = sigma_z2*eye(length(rel_indexes));
+
+                        Xrp = X(rel_indexes);
+                        Yrp = Y(rel_indexes);
+    
+                        fft_indexes = mod((obj.ofdm.left_guard:obj.ofdm.right_guard)-obj.N/2, obj.N);
+                        fft_indexes(fft_indexes==0) = obj.N; 
+                        
+                        F   = dftmtx(obj.N);
+                        F   = F(:, 1:obj.L);
+                        
+                        Frp = F(fft_indexes(rel_indexes), :);          
+                        Arp = diag(Xrp) * Frp;
+                        h_rp = (Arp'*Arp+1e-6*eye(obj.L)) \ (Arp' * Yrp);
+                        H_rp = F(fft_indexes, :) * h_rp; 
+                        
+                        H = 1./obj.eqv;
+                        F   = dftmtx(obj.N);
+                        h = F(fft_indexes, :) \ H;
+                        Rh = diag(abs(h(1:obj.L)).^2);
+
+                        
+    
+                        new_eqv = conj(H_rp)./(abs(H_rp)+1e-3);
+                    end
 
                     obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
                     
-                    % obj.eqv(obj.dataIdx) = obj.eqv(obj.dataIdx) + obj.beta*(new_eqv(obj.dataIdx)-obj.eqv(obj.dataIdx));
-                    % obj.eqv(obj.eqv_pilotIdx) = obj.eqv(obj.eqv_pilotIdx) + obj.beta*(new_eqv(obj.eqv_pilotIdx)-obj.eqv(obj.eqv_pilotIdx));
 
-
+                % else
+                %     obj.eqv = ((1-obj.beta)+obj.beta*pilot_eqv).*obj.eqv;
                 end
+
                 obj.eqv = obj.eqv.*exp(-1i*sfo*t);
                 obj.std_eqv_err(i) = std(abs(obj.eqv(obj.dataIdx))-1);
             end

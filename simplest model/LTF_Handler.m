@@ -6,6 +6,7 @@ classdef LTF_Handler < handle
         sfo
         h
         H
+        noise
         eqv
         h_window
         debug
@@ -25,6 +26,7 @@ classdef LTF_Handler < handle
             obj.sfo = 0;
             obj.h = [];
             obj.H = [];
+            obj.noise = [];
             obj.eqv = [];
             obj.h_window = options.h_window;
             obj.debug = options.debug;
@@ -82,11 +84,13 @@ classdef LTF_Handler < handle
             obj.H = fft(buf)./fft(obj.ltf.ref);
             t = exp(1i*options.sfo*(0 : 2*obj.ltf.N-1).');
 
+            new_H = obj.H(:, 1);
             for i = 2:obj.ltf.Nsymb/2-2
-                obj.H(:, i) = options.beta*obj.H(:, i)+(1-options.beta)*obj.H(:, i-1);%.*t;
+                new_H = options.beta*obj.H(:, i)+(1-options.beta)*new_H;%.*t;
             end
 
-            obj.H = obj.H(:,obj.ltf.Nsymb/2-2);
+            obj.noise = std(diff(obj.H, 1, 2), 0, 2)./sqrt(2);
+            obj.H = new_H;
             obj.h = ifft(obj.H);
 
             [max_val, ~] = max(abs(obj.h));
@@ -96,6 +100,7 @@ classdef LTF_Handler < handle
             obj.h = circshift(obj.h, -obj.ltf.sto_shift);
             obj.H = fft(obj.h);
             obj.H = obj.H(1:2:end);
+            obj.noise = obj.noise(1:2:end);
 
 
             if obj.debug
