@@ -363,11 +363,16 @@ classdef DATA_Handler < handle
                         H_rp = F(fft_indexes, :) * h_rp; 
                         
                         H = 1./obj.eqv;
-                        F   = dftmtx(obj.N);
-                        h = F(fft_indexes, :) \ H;
+                        iF = conj(dftmtx(obj.N));
+                        % F   = dftmtx(obj.N);
+                        h = iF(fft_indexes, :) \ H;
                         Rh = diag(abs(h(1:obj.L)).^2);
 
-                        
+                        % F   = dftmtx(obj.N);
+                        % h = F(fft_indexes, 1:obj.L) \ H;
+                        % Rh = diag(abs(h).^2);
+
+
     
                         new_eqv = conj(H_rp)./(abs(H_rp)+1e-3);
                     end
