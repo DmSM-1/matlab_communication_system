@@ -40,6 +40,7 @@ classdef DATA_Handler < handle
         soft
         std_eqv_err
         est_method
+        Rh
     end
     methods
         function obj = DATA_Handler(options)
@@ -98,6 +99,7 @@ classdef DATA_Handler < handle
             obj.activeIdx = obj.ofdm.active-obj.ofdm.left_guard+1;
             obj.alpha = options.alpha;
             obj.beta = options.beta;
+            obj.Rh = (1/obj.L)*eye(obj.L);
             poly = 'z^32 + z^26 + z^23 + z^22 + z^16 + z^12 + z^11 + z^10 + z^8 + z^7 + z^5 + z^4 + z^2 + z + 1';
             obj.crcCfg = crcConfig(Polynomial=poly,ChecksumsPerFrame=1);
 
@@ -323,7 +325,7 @@ classdef DATA_Handler < handle
                     new_H = Y./X;
 
                     if obj.est_method == "simple"
-                        new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
+                        new_eqv = conj(new_H)./(abs(new_H).^2+1e-3);
                     else
                         sigma_z2 = mean(abs(dX).^2);
                         sigma_d2 = sigma_z2.*abs(obj.eqv).^2;
@@ -346,7 +348,7 @@ classdef DATA_Handler < handle
                         % rel_indexes = intersect(obj.activeIdx,find(ndX<2^(-obj.Mod_pow/2+1)));
                         rel_indexes = sort([obj.dataIdx(find(R>-2)); obj.eqv_pilotIdx]);
 
-                        Rz = sigma_z2*eye(length(rel_indexes));
+                        Rz_inv = 1/sigma_z2*eye(length(rel_indexes));
 
                         Xrp = X(rel_indexes);
                         Yrp = Y(rel_indexes);
@@ -355,33 +357,30 @@ classdef DATA_Handler < handle
                         fft_indexes(fft_indexes==0) = obj.N; 
                         
                         F   = dftmtx(obj.N);
-                        F   = F(:, 1:obj.L);
-                        
-                        Frp = F(fft_indexes(rel_indexes), :);          
+                        F   = F(fft_indexes, 1:obj.L);
+                        Frp = F(rel_indexes, :);          
+
+
+                        A = diag(X) * F;
+                        h = (A'*A+1e-6*eye(obj.L)) \ (A' * Y);
                         Arp = diag(Xrp) * Frp;
                         h_rp = (Arp'*Arp+1e-6*eye(obj.L)) \ (Arp' * Yrp);
-                        H_rp = F(fft_indexes, :) * h_rp; 
-                        
-                        H = 1./obj.eqv;
-                        iF = conj(dftmtx(obj.N));
-                        % F   = dftmtx(obj.N);
-                        h = iF(fft_indexes, :) \ H;
-                        Rh = diag(abs(h(1:obj.L)).^2);
+                        H_rp = F * h_rp; 
+                        h_rp_lmmse = ((obj.Rh+1e-6*eye(obj.L))\eye(obj.L)+Arp'*Rz_inv*Arp)\(Arp'*Rz_inv*Yrp);
+                        H_rp_lmmse = F * h_rp_lmmse;
+                       
+                        if obj.est_method == "LMMSE"
+                            new_eqv = conj(H_rp_lmmse)./(abs(H_rp_lmmse).^2+1e-3);
+                        else
+                            new_eqv = conj(H_rp)./(abs(H_rp).^2+1e-3);
+                        end
 
-                        % F   = dftmtx(obj.N);
-                        % h = F(fft_indexes, 1:obj.L) \ H;
-                        % Rh = diag(abs(h).^2);
-
-
-    
-                        new_eqv = conj(H_rp)./(abs(H_rp)+1e-3);
+                        obj.Rh = (1-obj.alpha)*obj.Rh+obj.alpha*(h*h');
                     end
 
-                    obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
                     
-
-                % else
-                %     obj.eqv = ((1-obj.beta)+obj.beta*pilot_eqv).*obj.eqv;
+                    obj.eqv = (1-obj.beta)*obj.eqv + obj.beta*new_eqv;
+                    
                 end
 
                 obj.eqv = obj.eqv.*exp(-1i*sfo*t);
