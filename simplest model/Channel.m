@@ -85,7 +85,7 @@ classdef Channel
             end
             
             if ~obj.awgn_only
-                reset(obj.tgnChannel);
+                % reset(obj.tgnChannel);
                 waveform = obj.tgnChannel(waveform);
 
                 if obj.cfo
@@ -93,8 +93,8 @@ classdef Channel
                 end
             end
             % waveform = obj.p_noise(waveform);
+            
             if obj.seed>0
-                reset(obj.rndStream);
                 waveform = awgn(waveform, obj.SNR, 0, obj.rndStream);
             else
                 waveform = awgn(waveform, obj.SNR);

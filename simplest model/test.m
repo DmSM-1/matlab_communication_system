@@ -1,4 +1,4 @@
-classdef OFDM_System < handle
+classdef test < handle
 
     properties
         % Внутренние модули
@@ -9,6 +9,7 @@ classdef OFDM_System < handle
         Fc
         Fs
         crc
+        snr
 
         cfo_enable
         sfp_enable
@@ -24,7 +25,7 @@ classdef OFDM_System < handle
     end
 
     methods
-        function obj = OFDM_System(options)
+        function obj = test(options)
             arguments
                 % --- System / Path Parameters ---
                 options.OutputDir (1,1) string = "Results/Experiment_01" % Путь по умолчанию
@@ -78,7 +79,7 @@ classdef OFDM_System < handle
 
                 options.sdr_order (1,1) int32 = 1
                 options.check_crc (1,1) logical = false
-                options.graph_output (1,1) logical = false
+                options.graph_output = []
 
                 options.cfo_enable = true
                 options.sfo_enable = true
@@ -91,6 +92,7 @@ classdef OFDM_System < handle
             obj.sdr_gain = options.sdr_gain;
             obj.crc = options.check_crc;
             obj.cfo_enable = options.cfo_enable;
+            obj.snr = options.SNR;
             
             % 1. Управление директорией (Overwrite / Create)
             obj.OutputDir = options.OutputDir;
@@ -228,8 +230,8 @@ classdef OFDM_System < handle
         function run_channel_on_dataset(obj)
             % RUN_CHANNEL_ON_DATASET Сканирует папку OutputDir, находит все
 
-            fprintf('--- Start Channel Simulation on Dataset ---\n');
-            fprintf('Target Directory: %s\n', obj.OutputDir);
+            % fprintf('--- Start Channel Simulation on Dataset ---\n');
+            % fprintf('Target Directory: %s\n', obj.OutputDir);
 
             % 1. Сканируем папку на наличие числовых подпапок
             files = dir(obj.OutputDir);
@@ -250,27 +252,21 @@ classdef OFDM_System < handle
             totalFolders = length(validNums);
             fprintf('Found %d folders. Processing...\n', totalFolders);
 
-            % 2. Цикл по всем найденным папкам
             reverseStr = ''; 
 
             for i = 1:totalFolders
                 folderIdx = validNums(i);
                 
-                % Формируем пути
                 currentDir = fullfile(obj.OutputDir, num2str(folderIdx));
                 txFile = fullfile(currentDir, 'tx_data.mat');
                 rxFile = fullfile(currentDir, 'rx_data.mat');
                 
-                % Проверяем наличие файла с данными передачи
                 if exist(txFile, 'file')
-                    % Загружаем tx_waveform
                     loadedData = load(txFile, 'tx_waveform');
                     
                     if isfield(loadedData, 'tx_waveform')
-                        % --- ПРОГОН ЧЕРЕЗ КАНАЛ ---
                         rx_waveform = obj.chan.tx(loadedData.tx_waveform);
                         
-                        % --- СОХРАНЕНИЕ ---
                         save(rxFile, 'rx_waveform');
                     else
                         fprintf('\nWarning: Folder %d does not contain tx_waveform variable.\n', folderIdx);
@@ -279,20 +275,17 @@ classdef OFDM_System < handle
                     fprintf('\nWarning: tx_data.mat not found in folder %d.\n', folderIdx);
                 end
                 
-                % Вывод прогресса
                 msg = sprintf('Processed: %d / %d (Folder ID: %d)', i, totalFolders, folderIdx);
                 fprintf([reverseStr, msg]);
                 reverseStr = repmat('\b', 1, length(msg));
             end
             
-            fprintf('\n--- Done ---\n');
         end
 
         function run_sdr_channel_on_dataset(obj)
             % RUN_CHANNEL_ON_DATASET Сканирует папку OutputDir, находит все
 
             fprintf('--- Start SDR Channel on Dataset ---\n');
-            fprintf('Target Directory: %s\n', obj.OutputDir);
 
             files = dir(obj.OutputDir);
             dirFlags = [files.isdir];
@@ -332,7 +325,6 @@ classdef OFDM_System < handle
                     end
 
                     if isfield(loadedData, 'tx_waveform')
-                        % --- ПРОГОН ЧЕРЕЗ КАНАЛ ---
                         STA1 = py.sdr.SDR( ...
                             adr(1,:), ...
                             obj.Fc, ...
@@ -361,7 +353,6 @@ classdef OFDM_System < handle
                         delete(STA1);
                         delete(STA2);
                                                 
-                        % --- СОХРАНЕНИЕ ---
                         save(rxFile, 'rx_waveform');
                     else
                         fprintf('\nWarning: Folder %d does not contain tx_waveform variable.\n', folderIdx);
@@ -370,13 +361,10 @@ classdef OFDM_System < handle
                     fprintf('\nWarning: tx_data.mat not found in folder %d.\n', folderIdx);
                 end
                 
-                % Вывод прогресса
                 msg = sprintf('Processed: %d / %d (Folder ID: %d)', i, totalFolders, folderIdx);
                 fprintf([reverseStr, msg]);
                 reverseStr = repmat('\b', 1, length(msg));
             end
-            
-            fprintf('\n--- Done ---\n');
         end
 
 
@@ -387,19 +375,16 @@ classdef OFDM_System < handle
                 options.seed = []
             end
 
-            % Удаляем только папки с именами "1", "2", "100" и т.д.
             
             files = dir(obj.OutputDir);
-            dirFlags = [files.isdir]; % Берем только папки
+            dirFlags = [files.isdir]; 
             subDirs = files(dirFlags);
             folderNames = {subDirs.name};
             
-            % Исключаем служебные '.' и '..'
             folderNames = folderNames(~ismember(folderNames, {'.', '..'}));
             
-            % Проверяем, является ли имя числом
             folderNums = str2double(folderNames);
-            isNumberedFolder = ~isnan(folderNums); % Маска: true, если имя - число
+            isNumberedFolder = ~isnan(folderNums); 
             
             foldersToDelete = folderNames(isNumberedFolder);
             
@@ -407,15 +392,15 @@ classdef OFDM_System < handle
                 fprintf('Cleaning up %d old data folders...\n', length(foldersToDelete));
                 for k = 1:length(foldersToDelete)
                     folderPath = fullfile(obj.OutputDir, foldersToDelete{k});
-                    rmdir(folderPath, 's'); % 's' удаляет папку вместе с содержимым
+                    rmdir(folderPath, 's'); 
                 end
             else
                 fprintf('Directory is clean. No numbered folders found.\n');
             end
 
-            fprintf('--- Start Data Generation ---\n');
-            fprintf('Target Directory: %s\n', obj.OutputDir);
-            fprintf('Payload: %d\n', obj.data_handler.payload);
+            % fprintf('--- Start Data Generation ---\n');
+            % fprintf('Target Directory: %s\n', obj.OutputDir);
+            % fprintf('Payload: %d\n', obj.data_handler.payload);
             
             reverseStr = ''; 
             t_start = tic;
@@ -432,16 +417,27 @@ classdef OFDM_System < handle
             end
             
             t_total = toc(t_start);
-            fprintf('\nDone! Total time: %.2f s\n', t_total);
+            fprintf('\n');
+            % fprintf('\nDone! Total time: %.2f s\n', t_total);
+        end
+
+
+        function [err, ferr, ber, fber, abs_err, mse] = get_metric(obj, rx_res_data, decoded_res_data, rx_eqv_data, tx_struct)
+            err     = xor(rx_res_data(:), tx_struct.coded_bits(:));
+            ferr    = xor(decoded_res_data(:), tx_struct.source_bits(:));
+            ber     = mean(err);
+            fber    = mean(ferr);
+
+            err     = reshape(err,      [], obj.data_handler.Nsymb);
+            ferr    = reshape(ferr,  [], obj.data_handler.Nsymb);
+            abs_err = abs(rx_eqv_data - tx_struct.tx_mod_symbols);
+            mse     = mean(abs_err(:).^2);
         end
 
 
         function process_dataset(obj)
-            % PROCESS_DATASET Загружает сохраненные rx_waveform из папок,
-            % прогоняет через приемник (STF->LTF->Data) и считает ошибки.
 
-            fprintf('--- Start Processing Dataset (Rx Analysis) ---\n');
-            fprintf('Directory: %s\n', obj.OutputDir);
+            fprintf('\nProcessing Dataset (Rx Analysis) ...\n');
 
             % 1. SCAN DIRECTORIES
             files = dir(obj.OutputDir);
@@ -463,21 +459,23 @@ classdef OFDM_System < handle
             ltf_h = LTF_Handler(obj.ltf, h_window=4*obj.Config.L, debug=false);
             
             % HEADER TITLE
-            fprintf('| %4s | %15s | %8s | %8s | %8s | %8s | %8s | %9s | %s |\n', 'ID', 'SNR (BB SNR)', 'BER(ID)','BER', 'BER(FEC)', 'RMSE(ID)', 'RMSE', 'CFO', 'Status');
-            fprintf('|%s|\n', repmat('-', 1, 100));
+            fprintf('| %4s | %8s | %8s | %8s | %8s | %8s | %8s | %8s | %8s | %8s |\n', 'ID', 'SNR', 'STF SNR', 'BER','LSML BER','LSNL BER', 'MSE', 'LSML MSE', 'LSNL MSE', 'Status');
+            % fprintf('|%s|\n', repmat('-', 1, 50));
 
-            total_ber = 0;
-            total_fec_ber = 0;
-            total_rmse = 0;
+            avg_s_ber = 0;
+            avg_lsml_ber = 0;
+            avg_lsn_ber = 0;
+            avg_s_mse = 0;
+            avg_lsml_mse = 0;
+            avg_lsn_mse = 0;
             valid_count = 0;
 
-            if obj.graph_output
-                fig1 = figure(1);
-                fig2 = figure(2);
-                fig3 = figure(3);
-                fig4 = figure(4);
-                fig5 = figure(5);
-            end
+            if any(obj.graph_output==1) fig1 = figure(1); end
+            if any(obj.graph_output==2) fig2 = figure(2); end
+            if any(obj.graph_output==3) fig3 = figure(3); end
+            if any(obj.graph_output==4) fig4 = figure(4); end
+            if any(obj.graph_output==5) fig5 = figure(5); end
+                
 
             % 3. RECEIVER LOOP
             for i = 1:totalFrames
@@ -489,7 +487,7 @@ classdef OFDM_System < handle
                 
                 % CHECK FILE EXISTANCE
                 if ~exist(rxFile, 'file') || ~exist(txFile, 'file')
-                    fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', 'NO FILE');
+                    fprintf('| %4d | %8.3f | %8.3f | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.4f | %8s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', '-', 'NO FILE');
                     continue;
                 end
                 
@@ -505,7 +503,7 @@ classdef OFDM_System < handle
                 detect = stf_h.detect(rx_waveform);
                 
                 if ~detect
-                    fprintf('| %4d | %15s | %8s  | %8s | %8s | %8s | %8s | %8s | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', 'FAIL:STF');
+                    fprintf('| %4d | %8.3f | %8.3f | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.4f | %8s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', '-', 'FAIL:STF');
                     continue;
                 end
                 
@@ -531,7 +529,7 @@ classdef OFDM_System < handle
                 est = ltf_h.estimate(rx_frame, sfo=sfo, beta=obj.data_handler.beta);
                 
                 if ~est
-                     fprintf('| %4d | %15s | %8s | %8s | %8s | %8s | %8s | %8.2e | %s |\n', folderIdx, '-', '-', '-', '-', '-', '-', stf_h.cfo, 'FAIL:LTF');
+                     fprintf('| %4d | %8.3f | %8.3f | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.4f | %8s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', '-', 'FAIL:LTF');
                      continue;
                 end
                 
@@ -543,43 +541,38 @@ classdef OFDM_System < handle
                 end
 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [id_rx_eqv_data, id_rx_eqv_pilots, id_ifft_data, id_rx_res_data, decoded_id_res_data] = obj.data_handler.get_data(rx_data_wav, source=tx_struct.coded_bits, snr=stf_h.snr);
+                [s_rx_eqv_data, s_rx_eqv_pilots, s_ifft_data, s_rx_res_data, s_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, method="simple", metric="ML", snr=stf_h.snr);
+
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [rx_eqv_data, rx_eqv_pilots, ifft_data, rx_res_data, decoded_res_data] = obj.data_handler.get_data(rx_data_wav, crc=obj.crc, snr=stf_h.snr);
+                [lsml_rx_eqv_data, lsml_rx_eqv_pilots, lsml_ifft_data, lsml_rx_res_data, lsml_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, method="LC", metric="ML", snr=stf_h.snr);
+
+                ltf_eqv = obj.data_handler.set_eqv(ltf_h);
+                [lsn_rx_eqv_data, lsn_rx_eqv_pilots, lsn_ifft_data, lsn_rx_res_data, lsn_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, method="LC", metric="N", snr=stf_h.snr);
                 
                 % ERRORS 
-                err         = xor(rx_res_data(:), tx_struct.coded_bits(:));
-                fec_err     = xor(decoded_res_data(:), tx_struct.source_bits(:));
-                id_err      = xor(id_rx_res_data(:), tx_struct.coded_bits(:));
+                [lsml_err, lsml_ferr, lsml_ber, lsml_fber, lsml_abs_err, lsml_mse] = get_metric(obj, lsml_rx_res_data, lsml_decoded_res_data, lsml_rx_eqv_data, tx_struct);
+                [s_err, s_ferr, s_ber, s_fber, s_abs_err, s_mse]                   = get_metric(obj, s_rx_res_data, s_decoded_res_data, s_rx_eqv_data, tx_struct);
+                [lsn_err, lsn_ferr, lsn_ber, lsn_fber, lsn_abs_err, lsn_mse] = get_metric(obj, lsn_rx_res_data, lsn_decoded_res_data, lsn_rx_eqv_data, tx_struct);
+                
 
-                ber         = mean(err);
-                fec_ber     = mean(fec_err);
-                id_ber      = mean(id_err);
-
-                err         = reshape(err,      [], obj.data_handler.Nsymb);
-                fec_err     = reshape(fec_err,  [], obj.data_handler.Nsymb);
-
-                abs_err     = abs(rx_eqv_data - tx_struct.tx_mod_symbols);
-                id_abs_err  = abs(id_rx_eqv_data - tx_struct.tx_mod_symbols);
-
-                rmse        = sqrt(mean(abs_err(:).^2));
-                id_rmse     = sqrt(mean(id_abs_err(:).^2));
-
-                total_ber = total_ber + ber;
-                total_fec_ber = total_fec_ber + fec_ber;
-                total_rmse = total_rmse + rmse;
+                avg_s_ber = avg_s_ber + s_ber;
+                avg_lsml_ber = avg_lsml_ber + lsml_ber;
+                avg_lsn_ber = avg_lsn_ber + lsn_ber;
+                avg_s_mse = avg_s_mse + s_mse;
+                avg_lsml_mse = avg_lsml_mse + lsml_mse;
+                avg_lsn_mse = avg_lsn_mse + lsn_mse;
                 valid_count = valid_count + 1;
                
                 %RESULTS
                     %CONSOL OUTPUT
                     snr_bb_gain = -10*log10((obj.data_handler.Ndat+obj.data_handler.Npil)/obj.data_handler.N);
                     snr = stf_h.snr+snr_bb_gain;
-                    fprintf('| %4d | %3.3f (%3.3f) | %8.5f | %8.5f | %8.5f | %8.4f | %8.4f | %8.2e | %6s |\n', ...
-                        folderIdx, stf_h.snr, snr, id_ber, ber, fec_ber, id_rmse, rmse, stf_h.cfo, 'OK');
+                    fprintf('| %4d | %8.3f | %8.3f | %8.5f | %8.5f | %8.5f | %8.5f | %8.5f | %8.5f | %8s |\n', ...
+                        folderIdx, obj.snr, stf_h.snr, s_ber, lsml_ber, lsn_ber, s_mse, lsml_mse, lsn_mse, 'OK');
                     
                     %SAVE RESULTS IN MAT
                     resFile = fullfile(currentDir, 'results.mat');
-                    save(resFile, 'ber', 'rmse', 'stf_h');
+                    save(resFile, 'lsml_ber', 'lsml_mse', 'stf_h');
     
                     %SAVE RESULTS IN CVS
                     csvPath = fullfile(obj.OutputDir, 'statistics.csv');
@@ -588,28 +581,29 @@ classdef OFDM_System < handle
                     fid = fopen(csvPath, 'a');
                     if fid ~= -1
                         if valid_count == 1 & new_file
-                            fprintf(fid, 'FolderID, MOD_POW, SNR, MS_SNR, BER, FEC_BER, ID_BER, RMSE, ID_RMSE,\n');
+                            fprintf(fid, 'FolderID, MOD_POW, SNR, MS_SNR, STF_BER, S_BER, LSML_BER, LSN_BER, S_MSE, LSML_MSE, LSN_MSE\n');
                         end
 
                         fprintf(fid, ...
-                            '%d,%f,%f,%f,%f,%f,%f,%f,%f\n', ...
+                            '%d,%f,%f,%f,%f,%f,%f,%f,%f,%f\n', ...
                             folderIdx, ...
                             obj.data_handler.Mod_pow, ...
-                            obj.chan.SNR, ...
-                            snr, ...
-                            ber, ...
-                            fec_ber, ...
-                            id_ber, ...
-                            rmse, ...
-                            id_rmse ...
+                            obj.snr, ...
+                            stf_h.snr, ...
+                            s_ber, ...
+                            lsml_ber, ...
+                            lsn_ber, ...
+                            s_mse, ...
+                            lsml_mse, ...
+                            lsn_mse ...
                         );
 
                         fclose(fid);
                     end
 
                 %PLOTS
-                if obj.graph_output
-                    %DUMP
+                %DUMP
+                if any(obj.graph_output==1)
                     set(0, 'CurrentFigure', fig1);
                         clf;
                         t = tiledlayout(fig1, 5, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -649,8 +643,9 @@ classdef OFDM_System < handle
                         nexttile;
                         plot(obj.data_handler.noise);
                         title("DISP FREQ PROFILE DATA");
-        
-                    %SPECTROGRAM
+                end
+                %SPECTROGRAM
+                if any(obj.graph_output==2)
                     set(0, 'CurrentFigure', fig2);
                         clf;
                         spectrogram(rx_waveform, obj.Config.N, [], 'yaxis', 'centered');
@@ -658,42 +653,46 @@ classdef OFDM_System < handle
                         clim([max_val-50, max_val]);
                         title(sprintf('Frame %d Spectrogram', folderIdx));
                           
-                    %IQ    
+                end
+                %IQ   
+                if any(obj.graph_output==3)
                     set(0, 'CurrentFigure', fig3);
                         clf;
                         t = tiledlayout(fig3, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
                         
-                        ifft_data_plot = ifft_data ./ sqrt(mean(abs(ifft_data.^2), 'all'));
+                        ifft_data_plot = lsml_ifft_data ./ sqrt(mean(abs(lsml_ifft_data.^2), 'all'));
                         
                         nexttile;
                         scatter(real(ifft_data_plot(:)), imag(ifft_data_plot(:)), 3, 'blue', '.');
                         hold on;
-                        scatter(real(rx_eqv_data(:)), imag(rx_eqv_data(:)), 3, 'red', '.');
-                        scatter(real(rx_eqv_pilots(:)), imag(rx_eqv_pilots(:)), 7, 'green', '.');
+                        scatter(real(lsml_rx_eqv_data(:)), imag(lsml_rx_eqv_data(:)), 3, 'red', '.');
+                        scatter(real(lsml_rx_eqv_pilots(:)), imag(lsml_rx_eqv_pilots(:)), 7, 'green', '.');
                         hold off;
                         
                         xlim([-2, 2]);
                         ylim([-2, 2]);
                         axis("square");
                         grid on;
-                        title(sprintf('Constellation (BER: %.1e)', ber));
+                        title(sprintf('Constellation LS (BER: %.1e)', lsml_ber));
         
-                        id_ifft_data_plot = id_ifft_data ./ sqrt(mean(abs(id_ifft_data.^2), 'all'));
+                        id_ifft_data_plot = s_ifft_data ./ sqrt(mean(abs(s_ifft_data.^2), 'all'));
         
                         nexttile;
                         scatter(real(id_ifft_data_plot(:)), imag(id_ifft_data_plot(:)), 3, 'blue', '.');
                         hold on;
-                        scatter(real(id_rx_eqv_data(:)), imag(id_rx_eqv_data(:)), 3, 'red', '.');
-                        scatter(real(id_rx_eqv_pilots(:)), imag(id_rx_eqv_pilots(:)), 7, 'green', '.');
+                        scatter(real(s_rx_eqv_data(:)), imag(s_rx_eqv_data(:)), 3, 'red', '.');
+                        scatter(real(s_rx_eqv_pilots(:)), imag(s_rx_eqv_pilots(:)), 7, 'green', '.');
                         hold off;
                         
                         xlim([-2, 2]);
                         ylim([-2, 2]);
                         axis("square");
                         grid on;
-                        title(sprintf('Constellation (id)'));
+                        title(sprintf('Constellation (BER: %.1e)', s_ber));
                     
-                    %ABS ERROR
+                end
+                %ABS ERROR
+                if any(obj.graph_output==4)
                     set(0, 'CurrentFigure', fig4);
                         clf;
     
@@ -707,8 +706,8 @@ classdef OFDM_System < handle
                         t = tiledlayout(fig4, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
         
                         ax1 = nexttile;
-                        mesh(ax1, abs_err);
-                        title(ax1, sprintf('Frame %d RMSE', folderIdx));
+                        mesh(ax1, lsml_abs_err);
+                        title(ax1, sprintf('Frame %d MSE', folderIdx));
                         colormap(ax1, 'jet');    
                         axis(ax1, 'xy');            
                         xlabel(ax1, 'Time / Index');
@@ -717,8 +716,8 @@ classdef OFDM_System < handle
                         clim(ax1, [0, 1]);
                         
                         ax2 = nexttile;
-                        mesh(ax2, id_abs_err);
-                        title(ax2, sprintf('Frame %d RMSE (id)', folderIdx));
+                        mesh(ax2, s_abs_err);
+                        title(ax2, sprintf('Frame %d MSE (id)', folderIdx));
                         colormap(ax2, 'jet');    
                         axis(ax2, 'xy');            
                         xlabel(ax2, 'Time / Index');
@@ -733,19 +732,21 @@ classdef OFDM_System < handle
                         setappdata(fig4, 'graphics_linkprop2', hLink2);
     
                     %BIT ERROR
+                end
+                if any(obj.graph_output==5)
                     set(0, 'CurrentFigure', fig5);
                         clf();
                         t = tiledlayout(fig5, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
         
                         ax1 = nexttile;
-                        imagesc(ax1, err);
+                        imagesc(ax1, lsml_err);
                         title(ax1, sprintf('Frame %d BER', folderIdx));
                         colormap(ax1, 'gray');    
                         axis(ax1, 'xy');            
                         xlabel(ax1, 'Time / Index');
                         
                         ax2 = nexttile;
-                        imagesc(ax2, fec_err);
+                        imagesc(ax2, lsml_ferr);
                         title(ax2, sprintf('Frame %d FEC BER', folderIdx));
                         colormap(ax2, 'gray');    
                         axis(ax2, 'xy');            
@@ -759,8 +760,8 @@ classdef OFDM_System < handle
             end
             
             if valid_count > 0
-                fprintf('|%s|\n', repmat('-', 1, 100));
-                fprintf('Avg BER: %e | Avg BER(FEC): %e | Avg RMSE: %f\n', total_ber/valid_count, total_fec_ber/valid_count, total_rmse/valid_count);
+                fprintf('| %4s | %8.3f | %8s | %8.5f | %8.5f | %8.5f | %8.5f | %8.5f | %8.5f |\n', ...
+                         'Avg', obj.snr, '-', avg_s_ber/valid_count, avg_lsml_ber/valid_count, avg_lsn_ber/valid_count, avg_s_mse/valid_count, avg_lsml_mse/valid_count, avg_lsn_mse/valid_count);
             end
         end
         
