@@ -3,6 +3,7 @@ classdef ofdm_simulator < handle
     properties
         chan
         stf
+        py_stf
         ltf
         data_handler
         Fc
@@ -160,6 +161,28 @@ classdef ofdm_simulator < handle
                 det_threshold  = options.stf_threshold ...
             );
 
+
+            % system(sprintf("python3 STF.py %d %d %d %d %d %d %f", ...
+            %     options.N, ...
+            %     options.L, ...
+            %     options.stf_est_symb, ...
+            %     options.stf_margin1, ...
+            %     options.stf_margin2, ...
+            %     options.stf_mask_width, ...
+            %     options.stf_threshold ...
+            % ));
+
+            obj.py_stf = py.STF.STF( ...
+                options.N, ...
+                options.L, ...
+                options.stf_est_symb, ...
+                options.stf_margin1, ...
+                options.stf_margin2, ...
+                options.stf_mask_width, ...
+                options.stf_threshold, ...
+                options.stf_Ppos ...
+            );
+
             obj.ltf = LTF( ...
                 options.N, options.L, ...
                 Nsymb = options.ltf_Nsymb, ...
@@ -208,7 +231,8 @@ classdef ofdm_simulator < handle
             tx_mod_symbols = obj.data_handler.mod_data;
             
             % Сборка полного кадра
-            tx_waveform = [obj.stf.waveform; obj.ltf.waveform; data_wav];
+            % tx_waveform = [obj.stf.waveform; obj.ltf.waveform; data_wav];
+            tx_waveform = [reshape(double(obj.stf.waveform), [], 1); obj.ltf.waveform; data_wav];
 
             % --- 2. Логика файловой системы ---
             
@@ -298,6 +322,30 @@ classdef ofdm_simulator < handle
             
         end
 
+        function waveform = recv(obj, STA2, tx_len)
+            buffer_size = double(STA2.buffer_size);
+            buf = zeros(buffer_size*2, 1);
+            stf_h = STF_Handler(obj.stf);
+            stf_len = length(obj.stf.waveform);
+            detect = 0;
+
+            buf(buffer_size+1:end, :) = reshape(double(STA2.recv()), [], 1);
+            for k = 1:100
+                buf(1:buffer_size, :) = buf(buffer_size+1:end, :);
+                buf(buffer_size+1:end, :) = reshape(double(STA2.recv()), [], 1);
+                detect = stf_h.detect(buf(1:buffer_size+stf_len, :));
+                stf_h.sto = max(1, stf_h.sto-2*stf_len);
+                if detect
+                    waveform = buf(stf_h.sto : min(length(buf), stf_h.sto+tx_len+2*stf_len), :);
+                    break;
+                end
+            end
+            
+            if ~detect
+                waveform = [];
+            end
+        end
+
         function run_sdr_channel_on_dataset(obj)
             % RUN_CHANNEL_ON_DATASET Сканирует папку OutputDir, находит все
 
@@ -340,6 +388,7 @@ classdef ofdm_simulator < handle
                         adr = ['ip:192.168.3.1'; 'ip:192.168.4.1'];
                     end
 
+
                     if isfield(loadedData, 'tx_waveform')
                         STA1 = py.sdr.SDR( ...
                             adr(1,:), ...
@@ -354,7 +403,7 @@ classdef ofdm_simulator < handle
                             adr(2,:), ...
                             obj.Fc, ... 
                             obj.Fs,...%+35, ...
-                            buffer_size = STA1.buffer_size*100, ...
+                            buffer_size = max(STA1.buffer_size*10, 2*length(obj.stf.waveform)+length(loadedData.tx_waveform)), ...
                             tx_hardwaregain_chan0 = 0, ...
                             rx_hardwaregain_chan0 = 50);
 
@@ -364,7 +413,7 @@ classdef ofdm_simulator < handle
                         tx_waveform = [zeros(1,25*STA1.buffer_size), tx_waveform];
                         
                         STA1.send(tx_waveform);
-                        rx_waveform = reshape(double(STA2.recv()), [], 1);
+                        rx_waveform = recv(obj, STA2, length(loadedData.tx_waveform));
 
                         delete(STA1);
                         delete(STA2);
@@ -471,6 +520,7 @@ classdef ofdm_simulator < handle
             totalFrames = length(validNums);
             
             % 2. INIT STF&LTF handlers
+
             stf_h = STF_Handler(obj.stf, debug=false);
             ltf_h = LTF_Handler(obj.ltf, h_window=4*obj.Config.L, debug=false);
             
@@ -510,6 +560,10 @@ classdef ofdm_simulator < handle
                 % --- RECEIVER PIPELINE ---
                 
                 %STF Detection & CFO, SNR estimation
+                py_stf_h = py.STF.Handler(obj.py_stf);
+
+                % detect = py_stf_h.detect(rx_waveform);
+
                 detect = stf_h.detect(rx_waveform);
                 
                 if ~detect
@@ -577,9 +631,9 @@ classdef ofdm_simulator < handle
                     %SAVE RESULTS IN CVS
                     csvPath = fullfile(obj.OutputDir, 'statistics.csv');
                     
-                    if exist(csvPath, "file")
-                        delete(csvPath);
-                    end
+                    % if exist(csvPath, "file")
+                    %     delete(csvPath);
+                    % end
                     new_file = ~isfile(csvPath);
                     fid = fopen(csvPath, 'a');
 
@@ -657,7 +711,7 @@ classdef ofdm_simulator < handle
                 if any(obj.graph_output==2)
                     set(0, 'CurrentFigure', fig2);
                         clf;
-                        t = tiledlayout(fig3, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+                        t = tiledlayout(fig2, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
                         hold on;
                         
                         nexttile;

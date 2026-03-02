@@ -1,10 +1,10 @@
-close all;
+ close all;
 clear; 
 clc;
 
 dataset_path = "test";
 
-snrs = 23:-3:5;
+snrs = 23:-3:6;
 runs = 3;
 k = 6;
 bw = 1.0;

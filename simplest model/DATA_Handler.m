@@ -43,7 +43,7 @@ classdef DATA_Handler < handle
         metric
         Rh
         h_len
-        virt_pil
+        Nvpil
     end
     methods
         function obj = DATA_Handler(options)
@@ -67,7 +67,7 @@ classdef DATA_Handler < handle
                 options.est_meth = "simple";
                 options.metric = "ML";
                 options.h_len = 16;
-                options.virt_pil = 16;
+                options.Nvpil = 16;
             end
             obj.N = options.N;
             obj.L = options.L;
@@ -79,7 +79,7 @@ classdef DATA_Handler < handle
             obj.est_method = options.est_meth;
             obj.metric = options.metric;
             obj.h_len = options.h_len;
-            obj.virt_pil = options.virt_pil;
+            obj.Nvpil = options.Nvpil;
             
             obj.ofdm = OFDM( ...
                 N=obj.N, ...
@@ -358,11 +358,11 @@ classdef DATA_Handler < handle
                         if obj.metric == "ML"
                             R = ndX(obj.dataIdx);
                             [sort_val, sort_index] = sort(R, 'ascend');
-                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.virt_pil-obj.Npil)); obj.eqv_pilotIdx]);
+                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.Nvpil-obj.Npil)); obj.eqv_pilotIdx]);
                         else
                             R = log(max(Pd./Pd_others, 1e-6));
                             [sort_val, sort_index] = sort(R, 'descend');
-                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.virt_pil-obj.Npil)); obj.eqv_pilotIdx]);
+                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.Nvpil-obj.Npil)); obj.eqv_pilotIdx]);
                         end
 
 
@@ -419,8 +419,8 @@ classdef DATA_Handler < handle
             arguments
                 obj 
                 waveform 
-                options.method = "simple"
-                options.metric = "ML"
+                options.method = obj.est_method
+                options.metric = obj.metric
                 options.snr = 10;
             end
             mod_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
@@ -455,6 +455,9 @@ classdef DATA_Handler < handle
             t = 1:length(obj.eqv);
             t = t.';
             t = t-length(obj.eqv)/2;
+
+            fft_indexes = mod((obj.ofdm.left_guard:obj.ofdm.right_guard)-obj.N/2, obj.N);
+            fft_indexes(fft_indexes==0) = obj.N; 
             
             for i = 1:obj.Nsymb
                 [ifft_data(:, i), ~, ~] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
@@ -522,6 +525,9 @@ classdef DATA_Handler < handle
                     X = rx_demod_res_data;
 
                     dX  = eqv_data(:, i)-X;
+                    Adx = abs(abs(eqv_data(:, i))-abs(X));
+                    Pdx = abs(angle(eqv_data(:, i))-angle(X));
+                    Pdx = min(Pdx, 2*pi-Pdx);
                     obj.noise = sqrt((1-obj.beta)*obj.noise.^2 + obj.beta*abs(dX).^2);
                     new_H = Y./X;
 
@@ -545,11 +551,28 @@ classdef DATA_Handler < handle
                         if options.metric == "ML"
                             R = ndX(obj.dataIdx);
                             [~, sort_index] = sort(R, 'ascend');
-                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.virt_pil-obj.Npil)); obj.eqv_pilotIdx]);
+
                         else
                             R = log(max(Pd./Pd_others, 1e-6));
                             [~, sort_index] = sort(R, 'descend');
-                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.virt_pil-obj.Npil)); obj.eqv_pilotIdx]);
+                            
+                            % R = ndX(obj.dataIdx);
+                            % a = obj.dataIdx(1:length(obj.dataIdx)-mod(length(obj.dataIdx), obj.Nvpil-obj.Npil));
+                            % R = R(1:length(a));
+                            % a = reshape(a, [], obj.Nvpil-obj.Npil);
+                            % 
+                            % R = reshape(R, [], obj.Nvpil-obj.Npil);
+                            % [~, sort_index] = sort(R, 'descend');
+                            % sort_index = sort_index(1, :) + (0:size(a,2)-1)*size(a,1);
+                            % rel_indexes = sort([obj.dataIdx(sort_index); obj.eqv_pilotIdx]);
+                        end
+
+                        if obj.Nvpil == -1
+                            rel_indexes = sort([obj.dataIdx; obj.eqv_pilotIdx]);
+                        elseif obj.Nvpil == 0
+                            rel_indexes = obj.eqv_pilotIdx;
+                        else
+                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.Nvpil)); obj.eqv_pilotIdx]);
                         end
 
 
@@ -558,9 +581,6 @@ classdef DATA_Handler < handle
                         Xrp = X(rel_indexes);
                         Yrp = Y(rel_indexes);
     
-                        fft_indexes = mod((obj.ofdm.left_guard:obj.ofdm.right_guard)-obj.N/2, obj.N);
-                        fft_indexes(fft_indexes==0) = obj.N; 
-                        
                         F   = dftmtx(obj.N);
                         F   = F(fft_indexes, :);
 

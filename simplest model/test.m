@@ -544,10 +544,10 @@ classdef test < handle
                 [s_rx_eqv_data, s_rx_eqv_pilots, s_ifft_data, s_rx_res_data, s_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, method="simple", metric="ML", snr=stf_h.snr);
 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [lsml_rx_eqv_data, lsml_rx_eqv_pilots, lsml_ifft_data, lsml_rx_res_data, lsml_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, method="LC", metric="ML", snr=stf_h.snr);
+                [lsml_rx_eqv_data, lsml_rx_eqv_pilots, lsml_ifft_data, lsml_rx_res_data, lsml_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, method="LS", metric="ML", snr=stf_h.snr);
 
                 ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                [lsn_rx_eqv_data, lsn_rx_eqv_pilots, lsn_ifft_data, lsn_rx_res_data, lsn_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, method="LC", metric="N", snr=stf_h.snr);
+                [lsn_rx_eqv_data, lsn_rx_eqv_pilots, lsn_ifft_data, lsn_rx_res_data, lsn_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, method="LS", metric="ML", snr=stf_h.snr);
                 
                 % ERRORS 
                 [lsml_err, lsml_ferr, lsml_ber, lsml_fber, lsml_abs_err, lsml_mse] = get_metric(obj, lsml_rx_res_data, lsml_decoded_res_data, lsml_rx_eqv_data, tx_struct);
