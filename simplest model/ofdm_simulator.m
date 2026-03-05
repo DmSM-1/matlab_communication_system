@@ -6,6 +6,7 @@ classdef ofdm_simulator < handle
         py_stf
         ltf
         data_handler
+        stf_h
         Fc
         Fs
         crc
@@ -27,14 +28,18 @@ classdef ofdm_simulator < handle
         soft       
         Nvpil          
         est_method    
-        metric         
+        metric  
+
+        audio
+        audio_path
+        player 
     end
 
     methods
         function obj = ofdm_simulator(options)
             arguments
                 % --- System / Path Parameters ---
-                options.OutputDir (1,1) string = "Results/Experiment_01" % Путь по умолчанию
+                options.OutputDir (1,1) string = "Results/Experiment_01"
                 
                 % --- Global Parameters ---
                 options.N (1,1) double = 1024
@@ -70,23 +75,19 @@ classdef ofdm_simulator < handle
                 options.data_Nsymb (1,1) double = 2000
                 options.Mod_pow (1,1) double = 4
                 options.Cod_rate (1,1) double = 1
-                % options.alpha (1,1) double = 0.5
-                % options.beta (1,1) double = 0.5
                 options.debug (1,1) logical = true
                 options.guards = []
                 options.DC_guard (1,1) int32 = 1
                 options.win_slope (1,1) double = 0
-                % options.soft (1,1) logical = 0
-                % options.est_method string = "simple"
-                % options.metric string = "ML"
                 options.h_len (1,1) double = 16
-                % options.Nvpil (1,1) int32 = 16
-
                 options.sdr_order (1,1) int32 = 1
                 options.check_crc (1,1) logical = true
+                options.est_period (1,1) int32 = 1
 
+                % --- Graph parameters ---
                 options.graph_output = []
 
+                % --- Variables ---
                 options.names        = []
                 options.alpha        = []
                 options.beta         = []
@@ -95,9 +96,13 @@ classdef ofdm_simulator < handle
                 options.metric       = []
                 options.Nvpil        = []
 
+                % --- Compensation ---
                 options.cfo_enable = true
                 options.sfo_enable = true
                 options.ltf_eqv_enable = true
+
+                options.audio = false
+                options.auido_path = 'FlyMeToTheMoon_mono.wav';
             end
 
             obj.Fc = options.Fc;
@@ -107,6 +112,7 @@ classdef ofdm_simulator < handle
             obj.crc = options.check_crc;
             obj.cfo_enable = options.cfo_enable;
             obj.snr = options.SNR;
+            obj.player = [];
 
             obj.names       = options.names;
             obj.alpha       = options.alpha;
@@ -117,30 +123,27 @@ classdef ofdm_simulator < handle
             obj.Nvpil       = options.Nvpil;
 
             
-            % 1. Управление директорией (Overwrite / Create)
             obj.OutputDir = options.OutputDir;
             obj.graph_output = options.graph_output;
             obj.ltf_eqv_enable = options.ltf_eqv_enable;
-            
+
+            obj.audio = options.audio;
+            obj.audio_path = options.auido_path;
+
             if ~exist(obj.OutputDir, 'dir')
                 mkdir(obj.OutputDir);
             end
             
-            
-            % 2. Обработка параметров
             if isempty(options.stf_Ppos)
                 options.stf_Ppos = [0.25, 0.75] * options.N + 1;
             end
             
             obj.Config = options;
 
-            % 3. Сохранение конфигурации
-            % Сохраняем структуру options в файл config.mat внутри папки
             configPath = fullfile(obj.OutputDir, 'config.mat');
             save(configPath, 'options');
             
 
-            % 4. Инициализация подсистем
             obj.chan = Channel( ...
                 Model = options.ChanModel, ...
                 dist  = options.dist, ...
@@ -161,6 +164,7 @@ classdef ofdm_simulator < handle
                 det_threshold  = options.stf_threshold ...
             );
 
+            obj.stf_h = STF_Handler(obj.stf);
 
             % system(sprintf("python3 STF.py %d %d %d %d %d %d %f", ...
             %     options.N, ...
@@ -205,56 +209,58 @@ classdef ofdm_simulator < handle
                 DC_guard = options.DC_guard, ...
                 win_slope= options.win_slope, ...
                 h_len    = options.h_len, ...
+                est_period = options.est_period, ...
                 debug    = options.debug   ...
             );
             
         end
 
-        function [tx_waveform, coded_bits] = generate_frame(obj, seed)
+        function [tx_waveform, coded_bits] = generate_frame(obj, seed, options)
             arguments
                 obj
                 seed = [] 
+                options.iter = 1
             end
 
-            % --- 1. Генерация данных ---
-            if ~isempty(seed)
-                rng(seed);
+            source_bits = [];
+
+            if obj.audio
+                [y, Fs] = audioread('FlyMeToTheMoon_mono.wav', [obj.data_handler.payload/16*(options.iter-1)+1, obj.data_handler.payload/16*options.iter]);
+                y = int16(2^15.*y);
+                source_bits = double(de2bi(typecast(y, 'uint16'), 16, 'left-msb'));
+                source_bits = reshape(source_bits, obj.data_handler.payload_per_symbol, []);
+                source_bits = xor(source_bits, obj.data_handler.scrambler);
+                source_bits = double(source_bits(:));
+
+            else
+                if ~isempty(seed)
+                    rng(seed);
+                end
+                source_bits = randi([0, 1], obj.data_handler.payload, 1);
             end
 
-            source_bits = randi([0, 1], obj.data_handler.payload, 1);
             coded_bits = obj.data_handler.generate_data(source_data=source_bits);
 
-            % Генерируем waveform (внутри data_handler обновляется поле mod_data)
             data_wav = obj.data_handler.get_waveform(coded_bits);
-            
-            % ИЗВЛЕКАЕМ МОДУЛИРОВАННЫЕ СИМВОЛЫ (QAM)
             tx_mod_symbols = obj.data_handler.mod_data;
-            
-            % Сборка полного кадра
-            % tx_waveform = [obj.stf.waveform; obj.ltf.waveform; data_wav];
             tx_waveform = [reshape(double(obj.stf.waveform), [], 1); obj.ltf.waveform; data_wav];
 
-            % --- 2. Логика файловой системы ---
             
-            % Получаем список всех папок внутри OutputDir
             files = dir(obj.OutputDir);
             dirFlags = [files.isdir];
             subDirs = files(dirFlags);
             folderNames = {subDirs.name};
             
-            % Фильтрация имен
             folderNames = folderNames(~ismember(folderNames, {'.', '..'}));
             folderNums = str2double(folderNames);
             validNums = folderNums(~isnan(folderNums));
             
-            % Определение следующего индекса
             if isempty(validNums)
                 nextIdx = 1;
             else
                 nextIdx = max(validNums) + 1;
             end
             
-            % --- 3. Создание папки и сохранение ---
             
             newDirName = num2str(nextIdx);
             currentSaveDir = fullfile(obj.OutputDir, newDirName);
@@ -263,7 +269,6 @@ classdef ofdm_simulator < handle
             
             savePath = fullfile(currentSaveDir, 'tx_data.mat');
             
-            % СОХРАНЯЕМ 3 ПЕРЕМЕННЫЕ: волну, биты и QAM-символы
             save(savePath, 'tx_waveform', 'coded_bits', 'source_bits', 'tx_mod_symbols');
         end
         
@@ -295,6 +300,7 @@ classdef ofdm_simulator < handle
             reverseStr = ''; 
 
             for i = 1:totalFolders
+                tic;
                 folderIdx = validNums(i);
                 
                 currentDir = fullfile(obj.OutputDir, num2str(folderIdx));
@@ -315,7 +321,7 @@ classdef ofdm_simulator < handle
                     fprintf('\nWarning: tx_data.mat not found in folder %d.\n', folderIdx);
                 end
                 
-                msg = sprintf('Processed: %d / %d (Folder ID: %d)', i, totalFolders, folderIdx);
+                msg = sprintf('Processed: %d / %d (Folder ID: %d) %f s', i, totalFolders, folderIdx, toc());
                 fprintf([reverseStr, msg]);
                 reverseStr = repmat('\b', 1, length(msg));
             end
@@ -323,20 +329,24 @@ classdef ofdm_simulator < handle
         end
 
         function waveform = recv(obj, STA2, tx_len)
+            STA2.recv(); %захватываем данные в буффер
+            STA2.recv(); %сдвинули буффер
+            STA2.recv(); %сдвинули буффер
+
             buffer_size = double(STA2.buffer_size);
             buf = zeros(buffer_size*2, 1);
-            stf_h = STF_Handler(obj.stf);
+            
             stf_len = length(obj.stf.waveform);
             detect = 0;
 
-            buf(buffer_size+1:end, :) = reshape(double(STA2.recv()), [], 1);
-            for k = 1:100
+            buf(buffer_size+1:end, :) = STA2.recv().';
+            for k = 1:10
                 buf(1:buffer_size, :) = buf(buffer_size+1:end, :);
-                buf(buffer_size+1:end, :) = reshape(double(STA2.recv()), [], 1);
-                detect = stf_h.detect(buf(1:buffer_size+stf_len, :));
-                stf_h.sto = max(1, stf_h.sto-2*stf_len);
+                buf(buffer_size+1:end, :) = STA2.recv().';
+                detect = obj.stf_h.detect(buf(1:buffer_size+stf_len, :));
+                obj.stf_h.sto = max(1, obj.stf_h.sto-2*stf_len);
                 if detect
-                    waveform = buf(stf_h.sto : min(length(buf), stf_h.sto+tx_len+2*stf_len), :);
+                    waveform = buf(obj.stf_h.sto : min(2*buffer_size, obj.stf_h.sto+tx_len+2*stf_len), :);
                     break;
                 end
             end
@@ -346,7 +356,11 @@ classdef ofdm_simulator < handle
             end
         end
 
-        function run_sdr_channel_on_dataset(obj)
+        function run_sdr_channel_on_dataset(obj, options)
+            arguments
+                obj 
+                options.folder = 0
+            end
             % RUN_CHANNEL_ON_DATASET Сканирует папку OutputDir, находит все
 
             fprintf('--- Start SDR Channel on Dataset ---\n');
@@ -372,52 +386,66 @@ classdef ofdm_simulator < handle
 
             reverseStr = ''; 
 
+            adr = ['ip:192.168.4.1'; 'ip:192.168.3.1'];
+
+            if obj.sdr_order
+                adr = ['ip:192.168.3.1'; 'ip:192.168.4.1'];
+            end
+
+            STA1 = py.sdr.SDR( ...
+                adr(1,:), ...
+                obj.Fc, ...
+                obj.Fs, ...
+                tx_cycle_buffer = false, ...
+                buffer_size = 65536, ...
+                tx_hardwaregain_chan0 = 0, ...
+                rx_hardwaregain_chan0 = 50);
+            
+            STA2 = py.sdr.SDR( ...
+                adr(2,:), ...
+                obj.Fc, ... 
+                obj.Fs,...%+35, ...
+                buffer_size = STA1.buffer_size*50, ...
+                tx_hardwaregain_chan0 = 0, ...
+                rx_hardwaregain_chan0 = 50);
+
+
+            reverseStr = '';
+
+            STA2.recv();
+            % Короче читай мануал к libiio, там было сказано про использовании на rx нескольких буфферов. 
+            % При первом запуске как бы используется первый, но при последующих самые новые данные лежат только в "последнем"
+            
+
+
             for i = 1:totalFolders
+                tic;
+
+                if options.folder
+                    i = options.folder;
+                end
+
                 folderIdx = validNums(i);
-                
+
                 % Формируем пути
                 currentDir = fullfile(obj.OutputDir, num2str(folderIdx));
                 txFile = fullfile(currentDir, 'tx_data.mat');
                 rxFile = fullfile(currentDir, 'rx_data.mat');
+
                 
                 if exist(txFile, 'file')
                     loadedData = load(txFile, 'tx_waveform');
-                    adr = ['ip:192.168.4.1'; 'ip:192.168.3.1'];
-
-                    if obj.sdr_order
-                        adr = ['ip:192.168.3.1'; 'ip:192.168.4.1'];
-                    end
-
 
                     if isfield(loadedData, 'tx_waveform')
-                        STA1 = py.sdr.SDR( ...
-                            adr(1,:), ...
-                            obj.Fc, ...
-                            obj.Fs, ...
-                            tx_cycle_buffer = false, ...
-                            buffer_size = 65536, ...
-                            tx_hardwaregain_chan0 = 0, ...
-                            rx_hardwaregain_chan0 = 50);
-                        
-                        STA2 = py.sdr.SDR( ...
-                            adr(2,:), ...
-                            obj.Fc, ... 
-                            obj.Fs,...%+35, ...
-                            buffer_size = max(STA1.buffer_size*10, 2*length(obj.stf.waveform)+length(loadedData.tx_waveform)), ...
-                            tx_hardwaregain_chan0 = 0, ...
-                            rx_hardwaregain_chan0 = 50);
-
+                            
                         tx_waveform = (loadedData.tx_waveform).*obj.sdr_gain;
-
-                        tx_waveform = tx_waveform.';
-                        tx_waveform = [zeros(1,25*STA1.buffer_size), tx_waveform];
                         
-                        STA1.send(tx_waveform);
-                        rx_waveform = recv(obj, STA2, length(loadedData.tx_waveform));
+                        pause(1);
 
-                        delete(STA1);
-                        delete(STA2);
-                                                
+                        STA1.send([zeros(1,10*STA1.buffer_size), tx_waveform.']);
+                        rx_waveform = recv(obj, STA2, length(tx_waveform));
+                        
+
                         save(rxFile, 'rx_waveform');
                     else
                         fprintf('\nWarning: Folder %d does not contain tx_waveform variable.\n', folderIdx);
@@ -425,11 +453,18 @@ classdef ofdm_simulator < handle
                 else
                     fprintf('\nWarning: tx_data.mat not found in folder %d.\n', folderIdx);
                 end
-                
-                msg = sprintf('Processed: %d / %d (Folder ID: %d)', i, totalFolders, folderIdx);
+
+                msg = sprintf('Processed: %d / %d (Folder ID: %d) %3.6f s', i, totalFolders, folderIdx, toc);
                 fprintf([reverseStr, msg]);
                 reverseStr = repmat('\b', 1, length(msg));
+
+                if options.folder
+                    break
+                end
             end
+
+            delete(STA1);
+            delete(STA2);
         end
 
 
@@ -452,7 +487,7 @@ classdef ofdm_simulator < handle
             isNumberedFolder = ~isnan(folderNums); 
             
             foldersToDelete = folderNames(isNumberedFolder);
-            
+
             if ~isempty(foldersToDelete)
                 fprintf('Cleaning up %d old data folders...\n', length(foldersToDelete));
                 for k = 1:length(foldersToDelete)
@@ -463,9 +498,6 @@ classdef ofdm_simulator < handle
                 fprintf('Directory is clean. No numbered folders found.\n');
             end
 
-            % fprintf('--- Start Data Generation ---\n');
-            % fprintf('Target Directory: %s\n', obj.OutputDir);
-            % fprintf('Payload: %d\n', obj.data_handler.payload);
             
             reverseStr = ''; 
             t_start = tic;
@@ -474,9 +506,9 @@ classdef ofdm_simulator < handle
                 msg = sprintf('Generating: %3d / %d', i, num_frames);
                 fprintf([reverseStr, msg]);
                 if ~isempty(options.seed)
-                    obj.generate_frame(options.seed(mod(i-1, length(options.seed))+1));
+                    obj.generate_frame(options.seed(mod(i-1, length(options.seed))+1), "iter",i);
                 else
-                    obj.generate_frame(i);
+                    obj.generate_frame(i, iter=i);
                 end
                 reverseStr = repmat('\b', 1, length(msg));
             end
@@ -500,7 +532,11 @@ classdef ofdm_simulator < handle
         end
 
 
-        function process_dataset(obj)
+        function process_dataset(obj, options)
+            arguments
+                obj 
+                options.folder = 0
+            end
 
             fprintf('\nProcessing Dataset (Rx Analysis) ...\n');
 
@@ -525,7 +561,7 @@ classdef ofdm_simulator < handle
             ltf_h = LTF_Handler(obj.ltf, h_window=4*obj.Config.L, debug=false);
             
             % HEADER TITLE
-            fprintf('| %8s | %8s | %8s | %8s | %8s | %8s | %8s |\n', 'ID', 'SNR', 'STF SNR', 'BER', 'FEC BER', 'MSE', 'Status');
+            fprintf('| %8s | %8s | %8s | %8s | %8s | %8s | %8s | %8s |\n', 'ID', 'SNR', 'STF SNR', 'BER', 'FEC BER', 'MSE', 'Status', 'TIME');
 
             avg_s_ber = 0;
             avg_s_fec_ber = 0;
@@ -539,6 +575,12 @@ classdef ofdm_simulator < handle
 
             % 3. RECEIVER LOOP
             for i = 1:totalFrames
+                tic;
+
+                if options.folder
+                    i = options.folder;
+                end
+
                 folderIdx = validNums(i);
                 currentDir = fullfile(obj.OutputDir, num2str(folderIdx));
                 
@@ -560,7 +602,7 @@ classdef ofdm_simulator < handle
                 % --- RECEIVER PIPELINE ---
                 
                 %STF Detection & CFO, SNR estimation
-                py_stf_h = py.STF.Handler(obj.py_stf);
+                % py_stf_h = py.STF.Handler(obj.py_stf);
 
                 % detect = py_stf_h.detect(rx_waveform);
 
@@ -583,16 +625,15 @@ classdef ofdm_simulator < handle
                 sto = ltf_h.find_sto(rx_frame);
 
                 rx_data_wav = rx_frame(ltf_h.sto : end);
+                
                 [cfo, sfo] = obj.data_handler.get_freq(rx_data_wav);
-
                 phase = 0;
-            
                 for j = 1:length(rx_frame)
                     phase = phase + cfo;
                     rx_frame(j) = rx_frame(j)*exp(-1i*phase);
                 end
-
                 est = ltf_h.estimate(rx_frame, sfo=sfo, beta=obj.data_handler.beta);
+                
                 
                 if ~est
                      fprintf('| %8d | %8s | %8s | %8s | %8s | %8s | %8s | %8s | %8s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', 'FAIL:LTF');
@@ -610,7 +651,7 @@ classdef ofdm_simulator < handle
                 obj.data_handler.alpha = obj.alpha(1);
                 obj.data_handler.beta  = obj.beta(1);
                 obj.data_handler.soft  = obj.soft(1);
-                obj.data_handler.est_method = "simple";
+                obj.data_handler.est_method = obj.est_method(1);
                 obj.data_handler.metric = obj.metric(1);
                 obj.data_handler.Nvpil = obj.Nvpil(1);
 
@@ -625,8 +666,7 @@ classdef ofdm_simulator < handle
                 
                 %RESULTS
                     %CONSOL OUTPUT
-                    fprintf('| %8d | %8.4f | %8.4f | %8.5f | %8.5f | %8.5f | %8s |\n', ...
-                        folderIdx, obj.snr, stf_h.snr, s_ber, s_fber, s_mse, 'OK');
+                    
                     
                     %SAVE RESULTS IN CVS
                     csvPath = fullfile(obj.OutputDir, 'statistics.csv');
@@ -639,7 +679,7 @@ classdef ofdm_simulator < handle
 
                     if fid ~= -1
                         if valid_count == 1 & new_file
-                            fprintf(fid, 'FolderID, MOD_POW, SNR, MS_SNR, S_BER, S_FEC_BER, S_MSE');
+                            fprintf(fid, 'FolderID, MOD_POW, SNR, MS_SNR');
 
                             for name = obj.names
                                 fprintf(fid, ', %s_BER, %s_FEC_BER, %s_MSE', name, name, name);
@@ -650,17 +690,18 @@ classdef ofdm_simulator < handle
 
                         fprintf(fid, '%f,%f,%f', s_ber, s_fber, s_mse);
 
-                        for k = 1:length(obj.names)
+                        for k = 2:length(obj.names)
                             ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                            obj.data_handler.alpha = obj.alpha(mod(k, length(obj.alpha))+1);
-                            obj.data_handler.beta  = obj.beta(mod(k, length(obj.beta))+1);
-                            obj.data_handler.soft  = obj.soft(mod(k, length(obj.soft))+1);
-                            obj.data_handler.est_method = obj.est_method(mod(k, length(obj.est_method))+1);
-                            obj.data_handler.metric = obj.metric(mod(k, length(obj.metric))+1);
-                            obj.data_handler.Nvpil = obj.Nvpil(mod(k, length(obj.Nvpil))+1);
+                            obj.data_handler.alpha = obj.alpha(mod(k, length(obj.alpha)));
+                            obj.data_handler.beta  = obj.beta(mod(k, length(obj.beta)));
+                            obj.data_handler.soft  = obj.soft(mod(k, length(obj.soft)));
+                            obj.data_handler.est_method = obj.est_method(mod(k, length(obj.est_method)));
+                            obj.data_handler.metric = obj.metric(mod(k, length(obj.metric)));
+                            obj.data_handler.Nvpil = obj.Nvpil(mod(k, length(obj.Nvpil)));
 
                             [rx_eqv_data, rx_eqv_pilots, ifft_data, rx_res_data, decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, snr=stf_h.snr);
                             [err, ferr, ber, fber, abs_err, mse] = get_metric(obj, rx_res_data, decoded_res_data, rx_eqv_data, tx_struct);
+                            
 
                             fprintf(fid, ',%f,%f,%f', ber, fber, mse);
                         end
@@ -670,6 +711,33 @@ classdef ofdm_simulator < handle
                         fclose(fid);
                     end
 
+                    fprintf('| %8d | %8.4f | %8.4f | %8.5f | %8.5f | %8.5f | %8s | %8.5f |\n', ...
+                        folderIdx, obj.snr, stf_h.snr, s_ber, s_fber, s_mse, 'OK', toc);
+
+                if obj.audio
+                    s_decoded_res_data = reshape(s_decoded_res_data, obj.data_handler.payload_per_symbol, []);
+                    s_decoded_res_data = xor(s_decoded_res_data, obj.data_handler.scrambler);
+                    s_decoded_res_data = double(s_decoded_res_data(:));
+
+                    bits = reshape(s_decoded_res_data, [], 16); 
+                    y_uint = uint16(bi2de(int8(bits), 'left-msb'));
+                    y = double(typecast(y_uint, 'int16'))./2^15;
+                    % audiowrite("res.wav",y,44100);
+                    % sound(y, 44100);
+                    
+                    
+                    if ~isempty(obj.player)
+                        while isplaying(obj.player)
+                            pause(0.01); 
+                        end
+                    end
+
+                    obj.player = audioplayer(y, 44100);
+                    play(obj.player);
+
+
+                end
+                
                 %PLOTS
                 %DUMP
                 if any(obj.graph_output==1)
@@ -703,7 +771,7 @@ classdef ofdm_simulator < handle
                         plot(obj.data_handler.std_eqv_err);
                         title("STD error of AFC");
                         nexttile;
-                        plot(abs(ltf_h.h));
+                        plot(abs(ltf_h.h(1:2*obj.data_handler.L)));
                         title("channel impulse response");
 
                 end
@@ -781,6 +849,10 @@ classdef ofdm_simulator < handle
                         plotPath = fullfile(currentDir, 'analysis_plot.png');
                         exportgraphics(fig3, plotPath, 'Resolution', 300);
                         
+                end
+
+                if options.folder
+                    break
                 end
             end
             

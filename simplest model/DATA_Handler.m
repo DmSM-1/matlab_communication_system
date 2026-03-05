@@ -36,6 +36,7 @@ classdef DATA_Handler < handle
         decoder
 
         interleaver
+        scrambler
         window
         soft
         std_eqv_err
@@ -44,6 +45,7 @@ classdef DATA_Handler < handle
         Rh
         h_len
         Nvpil
+        est_period
     end
     methods
         function obj = DATA_Handler(options)
@@ -68,6 +70,7 @@ classdef DATA_Handler < handle
                 options.metric = "ML";
                 options.h_len = 16;
                 options.Nvpil = 16;
+                options.est_period = 1;
             end
             obj.N = options.N;
             obj.L = options.L;
@@ -80,6 +83,7 @@ classdef DATA_Handler < handle
             obj.metric = options.metric;
             obj.h_len = options.h_len;
             obj.Nvpil = options.Nvpil;
+            obj.est_period = options.est_period;
             
             obj.ofdm = OFDM( ...
                 N=obj.N, ...
@@ -111,6 +115,7 @@ classdef DATA_Handler < handle
             obj.Rh = (1/obj.h_len)*eye(obj.h_len);
             poly = 'z^32 + z^26 + z^23 + z^22 + z^16 + z^12 + z^11 + z^10 + z^8 + z^7 + z^5 + z^4 + z^2 + z + 1';
             obj.crcCfg = crcConfig(Polynomial=poly,ChecksumsPerFrame=1);
+            obj.scrambler = randi([0,2], obj.payload_per_symbol, obj.Nsymb, "double");
 
             obj.encoder = comm.ConvolutionalEncoder( ...
                 'TrellisStructure', obj.trellis, ...
@@ -146,6 +151,7 @@ classdef DATA_Handler < handle
             else
                 options.source_data = reshape(options.source_data, obj.payload_per_symbol, options.Nsymb);
             end
+            
             msg = crcGenerate(options.source_data, obj.crcCfg);
             
             source_bits = zeros(obj.Ndat*obj.Mod_pow, options.Nsymb);
@@ -429,6 +435,13 @@ classdef DATA_Handler < handle
             eqv_data = zeros(size(ifft_data));
             decoded_data = zeros(obj.payload_per_symbol, obj.Nsymb);
             indices = (1:obj.ofdm.bandsize).';
+            constel = qammod(0:2^obj.Mod_pow-1, 2^obj.Mod_pow, 'gray', 'UnitAveragePower', true).';
+
+            fft_indexes = mod((obj.ofdm.left_guard:obj.ofdm.right_guard)-obj.N/2, obj.N);
+            fft_indexes(fft_indexes==0) = obj.N; 
+
+            Ff   = dftmtx(obj.N);
+            Ff   = Ff(fft_indexes, :);
 
             iter = 0;
             
@@ -441,23 +454,18 @@ classdef DATA_Handler < handle
             sfo = sfo/(obj.ofdm.pilots(obj.Npil)-obj.ofdm.pilots(1));
             pilots = mean(pilots, 2);
             obj.ang(:,1) = pilots;
-            x = double(1:obj.Nsymb);
-            p = polyfit(x, pilots, 1);
-            dp = p(1)/(obj.L+obj.N);
-            phase = 0;
             
-            for i = 1:length(waveform)
-                phase = phase + dp;
-                waveform(i) = waveform(i)*exp(-1i*phase);
-            end
+            % for i = 1:length(waveform)
+            %     phase = phase + dp;
+            %     waveform(i) = waveform(i)*exp(-1i*phase);
+            % end
             
             iter = 0;
             t = 1:length(obj.eqv);
             t = t.';
             t = t-length(obj.eqv)/2;
 
-            fft_indexes = mod((obj.ofdm.left_guard:obj.ofdm.right_guard)-obj.N/2, obj.N);
-            fft_indexes(fft_indexes==0) = obj.N; 
+
             
             for i = 1:obj.Nsymb
                 [ifft_data(:, i), ~, ~] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
@@ -515,7 +523,7 @@ classdef DATA_Handler < handle
                     [~,err] = crcDetect(coded_data,obj.crcCfg);
                     decoded_data(:,i) = coded_data(1:obj.payload_per_symbol, :);
                 end
-                if ~err
+                if ~err && ~mod(i, obj.est_period)
                     pilots = pskmod(zeros(obj.Npil, 1), 2)*obj.pilAmpl;
                     rx_mod_res_data = qammod(coded_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
                     
@@ -534,37 +542,24 @@ classdef DATA_Handler < handle
                     if options.method == "simple"
                         new_eqv = conj(new_H)./(abs(new_H).^2+1e-3);
                     else
-                        sigma_z2 = mean(abs(dX).^2);
+                        dX  = abs(dX);
+                        sigma_z2 = mean(dX.^2);
                         sigma_d2 = sigma_z2.*abs(obj.eqv).^2;
                         sigma_d2 = sigma_d2(obj.dataIdx);
                         
-                        dX  = abs(dX);
-                        ndX = dX./abs(X);
-
-                        constel = qammod(0:2^obj.Mod_pow-1, 2^obj.Mod_pow, 'gray', 'UnitAveragePower', true).';
-                        dist2 = abs(eqv_data(obj.dataIdx, i) - constel.').^2;
-
-                        Pd = 1./pi./sigma_d2.*exp(-dX(obj.dataIdx).^2./sigma_d2);
-                        Pd_all = (1./(pi*sigma_d2)) .* exp(-dist2 ./ sigma_d2);
-                        Pd_others = sum(Pd_all, 2) - Pd;
-
                         if options.metric == "ML"
+                            ndX = dX./abs(X);
                             R = ndX(obj.dataIdx);
                             [~, sort_index] = sort(R, 'ascend');
 
                         else
+                            dist2 = abs(eqv_data(obj.dataIdx, i) - constel.').^2;
+                            Pd = 1./pi./sigma_d2.*exp(-dX(obj.dataIdx).^2./sigma_d2);
+                            Pd_all = (1./(pi*sigma_d2)) .* exp(-dist2 ./ sigma_d2);
+                            Pd_others = sum(Pd_all, 2) - Pd;
                             R = log(max(Pd./Pd_others, 1e-6));
                             [~, sort_index] = sort(R, 'descend');
                             
-                            % R = ndX(obj.dataIdx);
-                            % a = obj.dataIdx(1:length(obj.dataIdx)-mod(length(obj.dataIdx), obj.Nvpil-obj.Npil));
-                            % R = R(1:length(a));
-                            % a = reshape(a, [], obj.Nvpil-obj.Npil);
-                            % 
-                            % R = reshape(R, [], obj.Nvpil-obj.Npil);
-                            % [~, sort_index] = sort(R, 'descend');
-                            % sort_index = sort_index(1, :) + (0:size(a,2)-1)*size(a,1);
-                            % rel_indexes = sort([obj.dataIdx(sort_index); obj.eqv_pilotIdx]);
                         end
 
                         if obj.Nvpil == -1
@@ -575,23 +570,19 @@ classdef DATA_Handler < handle
                             rel_indexes = sort([obj.dataIdx(sort_index(1:obj.Nvpil)); obj.eqv_pilotIdx]);
                         end
 
-
-                        Rz_inv = 1/sigma_z2*eye(length(rel_indexes));
-
                         Xrp = X(rel_indexes);
                         Yrp = Y(rel_indexes);
     
-                        F   = dftmtx(obj.N);
-                        F   = F(fft_indexes, :);
-
-                        h = F(obj.activeIdx, 1:obj.L)'*new_H(obj.activeIdx);
+                        h = Ff(obj.activeIdx, 1:obj.L)'*new_H(obj.activeIdx);
                         [~, sto_shift] = max(abs(h));
-                        F   = F(:, int32(1:obj.h_len)+int32(sto_shift)-obj.h_len/2+1);
+                        F   = Ff(:, int32(1:obj.h_len)+int32(sto_shift)-obj.h_len/2+1);
                         Frp = F(rel_indexes, :);          
 
-                        Arp = diag(Xrp) * Frp;
+                        Arp = Xrp.*Frp;
 
                         if options.method == "LMMSE"
+                            Rz_inv = 1/sigma_z2*eye(length(rel_indexes));
+
                             A = diag(X) * F;
                             h = pinv(A'*A, sigma_z2) * (A' * Y);
 
@@ -601,9 +592,12 @@ classdef DATA_Handler < handle
 
                             obj.Rh = (1-obj.alpha)*obj.Rh+obj.alpha*(h*h');
                         else
-                            h_rp = pinv(Arp'*Arp, sigma_z2) * (Arp' * Yrp);
+                            A2 = Arp'*Arp;
+                            % h_rp = pinv(A2, sigma_z2) * (Arp' * Yrp);
+                            h_rp = (A2 + sigma_z2 * eye(size(A2))) \ (Arp' * Yrp);
                             H_rp = F * h_rp; 
                             new_eqv = conj(H_rp)./(abs(H_rp).^2+1e-3);
+                            % new_eqv = conj(new_H)./(abs(new_H).^2+1e-3);
                         end
                     end
 

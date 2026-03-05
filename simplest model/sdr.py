@@ -54,7 +54,6 @@ class SDR:
         # plt.plot(np.real(data))
         # plt.plot(np.imag(data))
         # plt.show()
-        
         self.sdr.tx(data)
 
         return True
@@ -65,7 +64,7 @@ class SDR:
         
         received = self.sdr.rx()
         
-        return received.tolist()
+        return received
     
 
     def close(self):
