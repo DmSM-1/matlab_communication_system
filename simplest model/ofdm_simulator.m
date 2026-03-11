@@ -102,7 +102,7 @@ classdef ofdm_simulator < handle
                 options.ltf_eqv_enable = true
 
                 options.audio = false
-                options.auido_path = 'FlyMeToTheMoon_mono.wav';
+                options.audio_path = 'FlyMeToTheMoon_mono.wav';
             end
 
             obj.Fc = options.Fc;
@@ -128,7 +128,7 @@ classdef ofdm_simulator < handle
             obj.ltf_eqv_enable = options.ltf_eqv_enable;
 
             obj.audio = options.audio;
-            obj.audio_path = options.auido_path;
+            obj.audio_path = options.audio_path;
 
             if ~exist(obj.OutputDir, 'dir')
                 mkdir(obj.OutputDir);
@@ -143,6 +143,7 @@ classdef ofdm_simulator < handle
             configPath = fullfile(obj.OutputDir, 'config.mat');
             save(configPath, 'options');
             
+
 
             obj.chan = Channel( ...
                 Model = options.ChanModel, ...
@@ -213,6 +214,24 @@ classdef ofdm_simulator < handle
                 debug    = options.debug   ...
             );
             
+            fid = fopen("config.txt", 'w');
+            fprintf(fid,'fft_size = %d\n', obj.data_handler.N);
+            fprintf(fid,'num_data_subc = %d\n', obj.data_handler.Ndat);
+            fprintf(fid,'num_pilot_subc = %d\n', obj.data_handler.Npil);
+            fprintf(fid,'cp_size = %d\n', obj.data_handler.L);
+            fprintf(fid,'num_symb = %d\n', obj.data_handler.Nsymb);
+
+            fprintf(fid,'bw_hz = %d\n', 10000000);
+            fprintf(fid,'fs_hz = %d\n', obj.Fs);
+            fprintf(fid,'lo_hz = %d\n', obj.Fc);
+            fprintf(fid,'hardwaregain = %d\n', 50);
+            fprintf(fid,'mult = %d\n', 1);
+            fprintf(fid,'rx_buf_size = %d\n', 10);
+            fprintf(fid,'tx_cycle_buf = %d\n', 0);
+            fprintf(fid,'tx_time_int = %d\n', 0);
+            fprintf(fid,'iterations = %d\n', 10000);
+            fclose(fid);
+
         end
 
         function [tx_waveform, coded_bits] = generate_frame(obj, seed, options)
@@ -225,7 +244,7 @@ classdef ofdm_simulator < handle
             source_bits = [];
 
             if obj.audio
-                [y, Fs] = audioread('FlyMeToTheMoon_mono.wav', [obj.data_handler.payload/16*(options.iter-1)+1, obj.data_handler.payload/16*options.iter]);
+                [y, Fs] = audioread(obj.audio_path, [obj.data_handler.payload/16*(options.iter-1)+1, obj.data_handler.payload/16*options.iter]);
                 y = int16(2^15.*y);
                 source_bits = double(de2bi(typecast(y, 'uint16'), 16, 'left-msb'));
                 source_bits = reshape(source_bits, obj.data_handler.payload_per_symbol, []);
@@ -392,31 +411,39 @@ classdef ofdm_simulator < handle
                 adr = ['ip:192.168.3.1'; 'ip:192.168.4.1'];
             end
 
-            STA1 = py.sdr.SDR( ...
-                adr(1,:), ...
-                obj.Fc, ...
-                obj.Fs, ...
-                tx_cycle_buffer = false, ...
-                buffer_size = 65536, ...
-                tx_hardwaregain_chan0 = 0, ...
-                rx_hardwaregain_chan0 = 50);
-            
-            STA2 = py.sdr.SDR( ...
-                adr(2,:), ...
-                obj.Fc, ... 
-                obj.Fs,...%+35, ...
-                buffer_size = STA1.buffer_size*50, ...
-                tx_hardwaregain_chan0 = 0, ...
-                rx_hardwaregain_chan0 = 50);
+            python = true;
+            STA1 = [];
+            STA2 = [];
 
+            if python
+                STA1 = py.sdr.SDR( ...
+                    adr(1,:), ...
+                    obj.Fc, ...
+                    obj.Fs, ...
+                    tx_cycle_buffer = false, ...
+                    buffer_size = 65536, ...
+                    tx_hardwaregain_chan0 = 0, ...
+                    rx_hardwaregain_chan0 = 50);
+    
+                STA2 = py.sdr.SDR( ...
+                    adr(2,:), ...
+                    obj.Fc, ... 
+                    obj.Fs,...%+35, ...
+                    buffer_size = STA1.buffer_size*10, ...
+                    tx_hardwaregain_chan0 = 0, ...
+                    rx_hardwaregain_chan0 = 50, ...
+                    stf=obj.py_stf);
+
+                % STA2.recv();
+                
+                % Короче читай мануал к libiio, там было сказано про использовании на rx нескольких буфферов. 
+                % При первом запуске как бы используется первый, но при последующих самые новые данные лежат только в "последнем"
+            else
+                sdr_mex('init', int32(0), int32(2^20), 'config.txt');
+                sdr_mex('init', int32(1), int32(2^20), 'config.txt');
+            end
 
             reverseStr = '';
-
-            STA2.recv();
-            % Короче читай мануал к libiio, там было сказано про использовании на rx нескольких буфферов. 
-            % При первом запуске как бы используется первый, но при последующих самые новые данные лежат только в "последнем"
-            
-
 
             for i = 1:totalFolders
                 tic;
@@ -440,12 +467,11 @@ classdef ofdm_simulator < handle
                             
                         tx_waveform = (loadedData.tx_waveform).*obj.sdr_gain;
                         
-                        pause(1);
+                        % pause(1);
 
-                        STA1.send([zeros(1,10*STA1.buffer_size), tx_waveform.']);
-                        rx_waveform = recv(obj, STA2, length(tx_waveform));
+                        STA1.send([zeros(1,1*STA1.buffer_size), tx_waveform.']);
+                        rx_waveform = double(STA2.recv_det(length(tx_waveform))).';
                         
-
                         save(rxFile, 'rx_waveform');
                     else
                         fprintf('\nWarning: Folder %d does not contain tx_waveform variable.\n', folderIdx);
@@ -463,8 +489,16 @@ classdef ofdm_simulator < handle
                 end
             end
 
-            delete(STA1);
-            delete(STA2);
+            sdr_mex('del', int32(0));
+            sdr_mex('del', int32(1));
+
+            if python
+                delete(STA1);
+                delete(STA2);
+            else
+                sdr_mex('del', int32(0));
+                sdr_mex('del', int32(1));
+            end
         end
 
 
@@ -557,7 +591,6 @@ classdef ofdm_simulator < handle
             
             % 2. INIT STF&LTF handlers
 
-            stf_h = STF_Handler(obj.stf, debug=false);
             ltf_h = LTF_Handler(obj.ltf, h_window=4*obj.Config.L, debug=false);
             
             % HEADER TITLE
@@ -603,28 +636,29 @@ classdef ofdm_simulator < handle
                 
                 %STF Detection & CFO, SNR estimation
                 % py_stf_h = py.STF.Handler(obj.py_stf);
-
                 % detect = py_stf_h.detect(rx_waveform);
 
-                detect = stf_h.detect(rx_waveform);
-                
+                % disp(py_stf_eh.sto);
+
+                detect = obj.stf_h.detect(rx_waveform);
+
                 if ~detect
                     fprintf('| %8d | %8s | %8s | %8s | %8s | %8s | %8s | %8s | %8s |\n', folderIdx, '-', '-', '-', '-', '-', '-', '-', 'FAIL:STF');
                     continue;
                 end
 
-                avg_stf_snr = avg_stf_snr + stf_h.snr;
+                avg_stf_snr = avg_stf_snr + obj.stf_h.snr;
                 
-                rx_frame = rx_waveform(stf_h.sto : min(length(rx_waveform), stf_h.sto + length(tx_struct.tx_waveform)));
+                rx_frame = rx_waveform(obj.stf_h.sto : min(length(rx_waveform), obj.stf_h.sto + length(tx_struct.tx_waveform)));
 
                 if obj.cfo_enable
-                    rx_frame = rx_frame .* exp(-2i*pi * stf_h.cfo * (0 : length(rx_frame)-1).');
+                    rx_frame = rx_frame .* exp(-2i*pi * obj.stf_h.cfo * (0 : length(rx_frame)-1).');
                 end
                 
                 %LTF Estimation 
                 sto = ltf_h.find_sto(rx_frame);
 
-                rx_data_wav = rx_frame(ltf_h.sto : end);
+                rx_data_wav = rx_frame(sto : end);
                 
                 [cfo, sfo] = obj.data_handler.get_freq(rx_data_wav);
                 phase = 0;
@@ -655,7 +689,7 @@ classdef ofdm_simulator < handle
                 obj.data_handler.metric = obj.metric(1);
                 obj.data_handler.Nvpil = obj.Nvpil(1);
 
-                [s_rx_eqv_data, s_rx_eqv_pilots, s_ifft_data, s_rx_res_data, s_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, snr=stf_h.snr);
+                [s_rx_eqv_data, s_rx_eqv_pilots, s_ifft_data, s_rx_res_data, s_decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, snr=obj.stf_h.snr);
                 [s_err, s_ferr, s_ber, s_fber, s_abs_err, s_mse] = get_metric(obj, s_rx_res_data, s_decoded_res_data, s_rx_eqv_data, tx_struct);
                 
                 avg_s_ber = avg_s_ber + s_ber;
@@ -686,7 +720,7 @@ classdef ofdm_simulator < handle
                             end
                         end
 
-                        fprintf(fid, '\n%d,%f,%f,%f,', folderIdx, obj.data_handler.Mod_pow,  obj.snr, stf_h.snr);
+                        fprintf(fid, '\n%d,%f,%f,%f,', folderIdx, obj.data_handler.Mod_pow,  obj.snr, obj.stf_h.snr);
 
                         fprintf(fid, '%f,%f,%f', s_ber, s_fber, s_mse);
 
@@ -699,7 +733,7 @@ classdef ofdm_simulator < handle
                             obj.data_handler.metric = obj.metric(mod(k, length(obj.metric)));
                             obj.data_handler.Nvpil = obj.Nvpil(mod(k, length(obj.Nvpil)));
 
-                            [rx_eqv_data, rx_eqv_pilots, ifft_data, rx_res_data, decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, snr=stf_h.snr);
+                            [rx_eqv_data, rx_eqv_pilots, ifft_data, rx_res_data, decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, snr=obj.stf_h.snr);
                             [err, ferr, ber, fber, abs_err, mse] = get_metric(obj, rx_res_data, decoded_res_data, rx_eqv_data, tx_struct);
                             
 
@@ -712,7 +746,7 @@ classdef ofdm_simulator < handle
                     end
 
                     fprintf('| %8d | %8.4f | %8.4f | %8.5f | %8.5f | %8.5f | %8s | %8.5f |\n', ...
-                        folderIdx, obj.snr, stf_h.snr, s_ber, s_fber, s_mse, 'OK', toc);
+                        folderIdx, obj.snr, obj.stf_h.snr, s_ber, s_fber, s_mse, 'OK', toc);
 
                 if obj.audio
                     s_decoded_res_data = reshape(s_decoded_res_data, obj.data_handler.payload_per_symbol, []);
@@ -722,7 +756,9 @@ classdef ofdm_simulator < handle
                     bits = reshape(s_decoded_res_data, [], 16); 
                     y_uint = uint16(bi2de(int8(bits), 'left-msb'));
                     y = double(typecast(y_uint, 'int16'))./2^15;
-                    % audiowrite("res.wav",y,44100);
+                    if i == 1
+                        audiowrite("res.wav",y,44100);
+                    end
                     % sound(y, 44100);
                     
                     

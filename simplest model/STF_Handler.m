@@ -63,7 +63,12 @@ classdef STF_Handler < handle
                 pilot_power = pilot_power/det_mask_weight;
                 noise_power = noise_power/(obj.stf.N-det_mask_weight);
 
+
                 SNR = 10*log10(pilot_power/noise_power);
+                
+                % disp(SNR)
+
+
                 obj.norm_snr = SNR;
                 
                 if obj.debug 
@@ -115,7 +120,7 @@ classdef STF_Handler < handle
                         
                         obj.cfo = polyfit(x, pilot_phases, 1);
                         obj.cfo = obj.cfo(1)/2/pi/double(obj.stf.period);
-                        
+
                         phase = 0;
                         obj.buf = obj.buf(1:end-mod(length(obj.buf), obj.stf.N));
                         for k = 1:length(obj.buf)
@@ -131,7 +136,6 @@ classdef STF_Handler < handle
                         noise_power = sum(sum(obj.buf))-pilot_power;
 
                         obj.snr = 10*log10(pilot_power/noise_power);
-                        
                         
                         if obj.debug
                             fprintf("Pilot position: %d\n", Ppos);
