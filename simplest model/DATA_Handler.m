@@ -216,214 +216,7 @@ classdef DATA_Handler < handle
             p = polyfit(x, pilots, 1);
             cfo = p(1)/(obj.L+obj.N);
         end
-        function [eqv_data, eqv_pilots, mod_data, coded_data, decoded_data] = get_data(obj, waveform, options)
-            arguments
-                obj 
-                waveform 
-                options.crc = false 
-                options.ideal = false
-                options.source = []
-                options.snr = 10;
-            end
-            mod_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
-            ifft_data = complex(zeros(obj.ofdm.bandsize, obj.Nsymb));
-            pilots = complex(zeros(obj.Npil, obj.Nsymb));
-            eqv_data = zeros(size(ifft_data));
-            decoded_data = zeros(obj.payload_per_symbol, obj.Nsymb);
-            indices = (1:obj.ofdm.bandsize).';
-            if ~isempty(options.source)
-                options.source = reshape(options.source, [], obj.Nsymb);
-            end
-            iter = 0;
-            
-            for i = 1:obj.Nsymb
-                [mod_data(:, i), ~, pilots(:, i)] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
-                iter = iter+(obj.N+obj.L);
-            end
-            pilots = unwrap(angle(pilots.'));
-            sfo = median(diff(pilots(:,obj.Npil)-pilots(:,1)));
-            sfo = sfo/(obj.ofdm.pilots(obj.Npil)-obj.ofdm.pilots(1));
-            pilots = mean(pilots, 2);
-            obj.ang(:,1) = pilots;
-            x = double(1:obj.Nsymb);
-            p = polyfit(x, pilots, 1);
-            dp = p(1)/(obj.L+obj.N);
-            phase = 0;
-            
-            for i = 1:length(waveform)
-                phase = phase + dp;
-                waveform(i) = waveform(i)*exp(-1i*phase);
-            end
-            
-            iter = 0;
-            t = 1:length(obj.eqv);
-            t = t.';
-            t = t-length(obj.eqv)/2;
-            
-            
-            for i = 1:obj.Nsymb
-                [ifft_data(:, i), ~, ~] = obj.ofdm.demod(waveform(iter+1:iter+(obj.N+obj.L)));
-                iter = iter+obj.N+obj.L;
-                eqv_data(:, i) = ifft_data(:, i).*obj.eqv;
-                
-                pilot_eqv = eqv_data(obj.eqv_pilotIdx, i)./obj.pilAmpl;
 
-                p = polyfit(obj.eqv_pilotIdx, unwrap(angle(pilot_eqv)), 1);
-                pilot_eqv = exp(-1i*polyval(p , indices));
-
-                eqv_data(:, i) = eqv_data(:, i).*pilot_eqv;
-                
-                eqv_pilots = eqv_data(obj.eqv_pilotIdx, i)./obj.pilAmpl;
-                eqv_data(:, i) = eqv_data(:, i)./sqrt(mean(abs(eqv_pilots.^2)));
-                coded_data = eqv_data(obj.dataIdx, i);
-                
-                if ~isempty(options.source)
-                    pilots = pskmod(zeros(obj.Npil, 1), 2)*obj.pilAmpl;
-                    rx_mod_res_data = qammod(options.source(:,i), 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
-                
-                    [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
-                    new_H = ifft_data(:, i)./rx_demod_res_data;
-                                 
-                    new_eqv = conj(new_H)./(abs(new_H.^2)+1e-3);
-                    obj.eqv = obj.eqv + obj.beta*(new_eqv-obj.eqv);
-                    val = polyfit(obj.eqv_pilotIdx, angle(conj(obj.eqv(obj.eqv_pilotIdx))), 1);
-                    obj.ang(i,1) = val(2);
-                    continue
-                end
-                snr_per_sc = options.snr + 10*log10((obj.Ndat + obj.Npil) / obj.N);
-                noise_var = 10^(-snr_per_sc / 10);
-                llr = [];
-                if obj.Cod_rate ~= 1
-                    
-                    buf = [];
-                    err = 0;
-                    if obj.soft
-                        llr = qamdemod( ...
-                            coded_data, 2^obj.Mod_pow, 'gray', ...
-                            'OutputType', 'approxllr', ...
-                            'UnitAveragePower', true, ...
-                            'NoiseVariance', noise_var);
-                        coded_data = reshape(llr, [], 1);
-                        
-                        buf = coded_data(1:2*(obj.payload_per_symbol+32+6),:);
-                        buf = obj.decoder(buf);
-                        coded_data = coded_data < 0;
-                    else
-                        coded_data = qamdemod(coded_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
-                        coded_data = reshape(coded_data, [], 1);
-                        buf = coded_data(1:2*(obj.payload_per_symbol+32+6),:);
-                        buf = obj.decoder(buf);
-                    end
-
-                    buf = buf(1:end-6, :);
-                    [~,err] = crcDetect(buf,obj.crcCfg);
-
-                    if ~err
-                        decoded_data(:,i) = buf(1:end-32, :);
-                    else
-                        decoded_data(:,i) = coded_data(1:2:2*(obj.payload_per_symbol),:);
-                    end
-                    coded_data = obj.generate_data(source_data=decoded_data(:, i), Nsymb=1);
-                else
-                    coded_data = qamdemod(coded_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true);
-                    coded_data = reshape(coded_data, [], 1);
-                    [~,err] = crcDetect(coded_data,obj.crcCfg);
-                    decoded_data(:,i) = coded_data(1:obj.payload_per_symbol, :);
-                end
-                if ~(err&&options.crc)
-                    pilots = pskmod(zeros(obj.Npil, 1), 2)*obj.pilAmpl;
-                    rx_mod_res_data = qammod(coded_data, 2^obj.Mod_pow, 'gray', 'InputType', 'bit', 'UnitAveragePower', true);
-                    
-                    [rx_demod_res_data, ~, ~] = obj.ofdm.demod(obj.ofdm.mod(rx_mod_res_data, pilots));
-    
-                    Y = ifft_data(:, i) ./ obj.N .* sqrt(length(obj.activeIdx));
-                    X = rx_demod_res_data;
-
-                    dX  = eqv_data(:, i)-X;
-                    obj.noise = sqrt((1-obj.beta)*obj.noise.^2 + obj.beta*abs(dX).^2);
-                    new_H = Y./X;
-
-                    if obj.est_method == "simple"
-                        new_eqv = conj(new_H)./(abs(new_H).^2+1e-3);
-                    else
-                        sigma_z2 = mean(abs(dX).^2);
-                        sigma_d2 = sigma_z2.*abs(obj.eqv).^2;
-                        sigma_d2 = sigma_d2(obj.dataIdx);
-                        
-                        
-                        dX  = abs(dX);
-                        ndX = dX./abs(X);
-
-                        constel = qammod(0:2^obj.Mod_pow-1, 2^obj.Mod_pow, 'gray', 'UnitAveragePower', true).';
-                        dist2 = abs(eqv_data(obj.dataIdx, i) - constel.').^2;
-
-                        Pd = 1./pi./sigma_d2.*exp(-dX(obj.dataIdx).^2./sigma_d2);
-                        Pd_all = (1./(pi*sigma_d2)) .* exp(-dist2 ./ sigma_d2);
-                        Pd_others = sum(Pd_all, 2) - Pd;
-
-
-                        % rel_indexes = sort([obj.activeIdx; obj.eqv_pilotIdx]);
-
-
-                        if obj.metric == "ML"
-                            R = ndX(obj.dataIdx);
-                            [sort_val, sort_index] = sort(R, 'ascend');
-                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.Nvpil-obj.Npil)); obj.eqv_pilotIdx]);
-                        else
-                            R = log(max(Pd./Pd_others, 1e-6));
-                            [sort_val, sort_index] = sort(R, 'descend');
-                            rel_indexes = sort([obj.dataIdx(sort_index(1:obj.Nvpil-obj.Npil)); obj.eqv_pilotIdx]);
-                        end
-
-
-                        Rz_inv = 1/sigma_z2*eye(length(rel_indexes));
-
-                        Xrp = X(rel_indexes);
-                        Yrp = Y(rel_indexes);
-    
-                        fft_indexes = mod((obj.ofdm.left_guard:obj.ofdm.right_guard)-obj.N/2, obj.N);
-                        fft_indexes(fft_indexes==0) = obj.N; 
-                        
-                        F   = dftmtx(obj.N);
-                        F   = F(fft_indexes, :);
-
-                        h = F(obj.activeIdx, 1:obj.L)'*new_H(obj.activeIdx);
-                        [~, sto_shift] = max(abs(h));
-                        F   = F(:, int32(1:obj.h_len)+int32(sto_shift)-obj.h_len/2+1);
-                        Frp = F(rel_indexes, :);          
-
-                        Arp = diag(Xrp) * Frp;
-
-                        if obj.est_method == "LMMSE"
-
-                            A = diag(X) * F;
-                            h = pinv(A'*A, sigma_z2) * (A' * Y);
-
-                            h_rp_lmmse = pinv(pinv(obj.Rh, sigma_z2)+Arp'*Rz_inv*Arp, sigma_z2)*(Arp'*Rz_inv*Yrp);
-                            H_rp_lmmse = F * h_rp_lmmse;
-                            new_eqv = conj(H_rp_lmmse)./(abs(H_rp_lmmse).^2+1e-3);
-
-                            obj.Rh = (1-obj.alpha)*obj.Rh+obj.alpha*(h*h');
-                        else
-                            h_rp = pinv(Arp'*Arp, sigma_z2) * (Arp' * Yrp);
-                            H_rp = F * h_rp; 
-                            new_eqv = conj(H_rp)./(abs(H_rp).^2+1e-3);
-                        end
-                           
-                    end
-
-                    obj.eqv = (1-obj.beta)*obj.eqv + obj.beta*new_eqv;
-                    
-                end
-
-                obj.eqv = obj.eqv.*exp(-1i*sfo*t);
-                obj.std_eqv_err(i) = std(abs(obj.eqv(obj.dataIdx))-1);
-            end
-            eqv_pilots      = eqv_data(obj.eqv_pilotIdx, :);
-            eqv_data        = eqv_data(obj.dataIdx, :);
-            coded_data      = reshape(qamdemod(eqv_data, 2^obj.Mod_pow, 'gray', 'OutputType', 'bit', 'UnitAveragePower', true), [], 1);
-            decoded_data    = reshape(decoded_data, [], 1);
-        end
         
         function [eqv_data, eqv_pilots, mod_data, coded_data, decoded_data] = get_frames(obj, waveform, options)
             arguments
@@ -469,6 +262,10 @@ classdef DATA_Handler < handle
             t = t.';
             t = t-length(obj.eqv)/2;
 
+            %PILOT CONV
+            pconv = ones(obj.Npil, 1).*Ff(obj.eqv_pilotIdx, 1:obj.h_len);
+            pconv = Ff(:, 1:obj.h_len)*sum(pinv(pconv),2);
+            wind = 1+abs(pconv(obj.dataIdx).^2);
 
             
             for i = 1:obj.Nsymb
@@ -490,6 +287,8 @@ classdef DATA_Handler < handle
                 snr_per_sc = options.snr + 10*log10((obj.Ndat + obj.Npil) / obj.N);
                 noise_var = 10^(-snr_per_sc / 10);
                 llr = [];
+
+
                 if obj.Cod_rate ~= 1
                     
                     buf = [];
@@ -556,13 +355,44 @@ classdef DATA_Handler < handle
                             R = ndX(obj.dataIdx);
                             [~, sort_index] = sort(R, 'ascend');
 
+                        elseif options.metric == "ML1"
+                            ndX = dX./abs(X);
+                            R = ndX(obj.dataIdx);
+                            R = R.*wind;
+                            [~, sort_index] = sort(R, 'ascend');
+
+                        elseif options.metric == "ML2"
+                            ndX = dX./abs(X);
+                            R = ndX(obj.dataIdx);
+                            sort_index = zeros(obj.Nvpil,1);
+                            step = floor(obj.Ndat/obj.Nvpil);
+
+                            for j = 1:obj.Nvpil
+                                [~, sort_index(j)] = min(R((j-1)*step+1:j*step));
+                                sort_index(j) = sort_index(j)+(j-1)*step+1;
+                            end
+
+                        elseif options.metric == "ML3"
+                            ndX = dX./abs(X);
+                            R = ndX(obj.dataIdx);
+                            R = R.*wind;
+                            sort_index = zeros(obj.Nvpil,1);
+                            step = floor(obj.Ndat/obj.Nvpil);
+
+                            for j = 1:obj.Nvpil
+                                [~, sort_index(j)] = min(R((j-1)*step+1:j*step));
+                                sort_index(j) = sort_index(j)+(j-1)*step+1;
+                            end
+
+                            % [~, sort_index] = sort(R, 'ascend');
+
                         else
                             dist2 = abs(eqv_data(obj.dataIdx, i) - constel.').^2;
                             Pd = 1./pi./sigma_d2.*exp(-dX(obj.dataIdx).^2./sigma_d2);
                             Pd_all = (1./(pi*sigma_d2)) .* exp(-dist2 ./ sigma_d2);
                             Pd_others = sum(Pd_all, 2) - Pd;
                             R = log(max(Pd./Pd_others, 1e-6));
-                            [~, sort_index] = sort(R, 'descend');
+                            [sort_index,] = sort(R, 'descend');
                             
                         end
 
@@ -596,12 +426,11 @@ classdef DATA_Handler < handle
 
                             obj.Rh = (1-obj.alpha)*obj.Rh+obj.alpha*(h*h');
                         else
+                            % h_rp = Frp\(Yrp./Xrp);
                             A2 = Arp'*Arp;
-                            % h_rp = pinv(A2, sigma_z2) * (Arp' * Yrp);
                             h_rp = (A2 + sigma_z2 * eye(size(A2))) \ (Arp' * Yrp);
                             H_rp = F * h_rp; 
                             new_eqv = conj(H_rp)./(abs(H_rp).^2+1e-3);
-                            % new_eqv = conj(new_H)./(abs(new_H).^2+1e-3);
                         end
                     end
 

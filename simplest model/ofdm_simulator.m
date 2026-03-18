@@ -415,33 +415,30 @@ classdef ofdm_simulator < handle
             STA1 = [];
             STA2 = [];
 
-            if python
-                STA1 = py.sdr.SDR( ...
-                    adr(1,:), ...
-                    obj.Fc, ...
-                    obj.Fs, ...
-                    tx_cycle_buffer = false, ...
-                    buffer_size = 65536, ...
-                    tx_hardwaregain_chan0 = 0, ...
-                    rx_hardwaregain_chan0 = 50);
-    
-                STA2 = py.sdr.SDR( ...
-                    adr(2,:), ...
-                    obj.Fc, ... 
-                    obj.Fs,...%+35, ...
-                    buffer_size = STA1.buffer_size*10, ...
-                    tx_hardwaregain_chan0 = 0, ...
-                    rx_hardwaregain_chan0 = 50, ...
-                    stf=obj.py_stf);
+            
+            STA1 = py.sdr.SDR( ...
+                adr(1,:), ...
+                obj.Fc, ...
+                obj.Fs, ...
+                tx_cycle_buffer = false, ...
+                buffer_size = 65536, ...
+                tx_hardwaregain_chan0 = 0, ...
+                rx_hardwaregain_chan0 = 50);
+
+            STA2 = py.sdr.SDR( ...
+                adr(2,:), ...
+                obj.Fc, ... 
+                obj.Fs,...%+35, ...
+                buffer_size = STA1.buffer_size*10, ...
+                tx_hardwaregain_chan0 = 0, ...
+                rx_hardwaregain_chan0 = 50, ...
+                stf=obj.py_stf);
 
                 % STA2.recv();
                 
                 % Короче читай мануал к libiio, там было сказано про использовании на rx нескольких буфферов. 
                 % При первом запуске как бы используется первый, но при последующих самые новые данные лежат только в "последнем"
-            else
-                sdr_mex('init', int32(0), int32(2^20), 'config.txt');
-                sdr_mex('init', int32(1), int32(2^20), 'config.txt');
-            end
+
 
             reverseStr = '';
 
@@ -466,12 +463,10 @@ classdef ofdm_simulator < handle
                     if isfield(loadedData, 'tx_waveform')
                             
                         tx_waveform = (loadedData.tx_waveform).*obj.sdr_gain;
-                        
                         % pause(1);
 
                         STA1.send([zeros(1,1*STA1.buffer_size), tx_waveform.']);
                         rx_waveform = double(STA2.recv_det(length(tx_waveform))).';
-                        
                         save(rxFile, 'rx_waveform');
                     else
                         fprintf('\nWarning: Folder %d does not contain tx_waveform variable.\n', folderIdx);
@@ -489,16 +484,9 @@ classdef ofdm_simulator < handle
                 end
             end
 
-            sdr_mex('del', int32(0));
-            sdr_mex('del', int32(1));
+            delete(STA1);
+            delete(STA2);
 
-            if python
-                delete(STA1);
-                delete(STA2);
-            else
-                sdr_mex('del', int32(0));
-                sdr_mex('del', int32(1));
-            end
         end
 
 
@@ -726,12 +714,12 @@ classdef ofdm_simulator < handle
 
                         for k = 2:length(obj.names)
                             ltf_eqv = obj.data_handler.set_eqv(ltf_h);
-                            obj.data_handler.alpha = obj.alpha(mod(k, length(obj.alpha)));
-                            obj.data_handler.beta  = obj.beta(mod(k, length(obj.beta)));
-                            obj.data_handler.soft  = obj.soft(mod(k, length(obj.soft)));
-                            obj.data_handler.est_method = obj.est_method(mod(k, length(obj.est_method)));
-                            obj.data_handler.metric = obj.metric(mod(k, length(obj.metric)));
-                            obj.data_handler.Nvpil = obj.Nvpil(mod(k, length(obj.Nvpil)));
+                            obj.data_handler.alpha = obj.alpha(mod(k, length(obj.alpha))+1);
+                            obj.data_handler.beta  = obj.beta(mod(k, length(obj.beta))+1);
+                            obj.data_handler.soft  = obj.soft(mod(k, length(obj.soft))+1);
+                            obj.data_handler.est_method = obj.est_method(mod(k, length(obj.est_method))+1);
+                            obj.data_handler.metric = obj.metric(mod(k, length(obj.metric))+1);
+                            obj.data_handler.Nvpil = obj.Nvpil(mod(k, length(obj.Nvpil))+1);
 
                             [rx_eqv_data, rx_eqv_pilots, ifft_data, rx_res_data, decoded_res_data] = obj.data_handler.get_frames(rx_data_wav, snr=obj.stf_h.snr);
                             [err, ferr, ber, fber, abs_err, mse] = get_metric(obj, rx_res_data, decoded_res_data, rx_eqv_data, tx_struct);

@@ -67,7 +67,6 @@ class SDR:
         # plt.plot(np.imag(data))
         # plt.show()
         self.sdr.tx(data)
-
         return True
     
 
@@ -75,7 +74,6 @@ class SDR:
         """Получить I/Q данные"""
         
         received = self.sdr.rx()
-
         return received
     
 
@@ -94,7 +92,7 @@ class SDR:
         received = np.zeros(2*self.sdr.rx_buffer_size, dtype=np.complex64)
         received[self.sdr.rx_buffer_size:] = self.sdr.rx()
         
-        for i in range(10):
+        for i in range(20):
             received[:self.sdr.rx_buffer_size] = received[self.sdr.rx_buffer_size:]
             received[self.sdr.rx_buffer_size:] = self.sdr.rx()
 

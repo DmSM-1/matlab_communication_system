@@ -104,7 +104,7 @@ class Handler:
             elif self.stage == 2:
                 self.detected += 1
                 if self.detected == self.stf.margin1:
-                    self.detect = 0
+                    self.detected = 0
                     self.buf = np.zeros([self.stf.Nest_symb,self.stf.symb_len], dtype=np.complex64)
                    
                     self.stage = 3
